@@ -369,14 +369,17 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
 
     // DE-Spalten (aktuell nur DE-Format vorhanden)
     const idx = name => headers.indexOf(name);
-    const iNr      = idx('Artikelnr.');
-    const iName    = idx('Artikelbezeichnung');
-    const iGroup   = idx('Gruppenname');
-    const iStock   = idx('Auf Lager');
-    const iAvail   = idx('Verfügbar');
-    const iMin     = idx('Mindestbestand');
-    const iUnit    = idx('Maßeinheit');
-    const iWeight  = idx('Gewicht in kg');
+    const iNr       = idx('Artikelnr.');
+    const iName     = idx('Artikelbezeichnung');
+    const iGroup    = idx('Gruppenname');
+    const iStock    = idx('Auf Lager');
+    const iAvail    = idx('Verfügbar');
+    const iMin      = idx('Mindestbestand');
+    const iUnit     = idx('Maßeinheit');
+    const iWeight   = idx('Gewicht in kg');
+    const iLead     = idx('Lieferzeit');
+    const iMinProd  = idx('Minimale Herstellmenge');
+    const iPurchase = idx('beschaffter Artikel');
 
     if (iNr === -1 || iMin === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Mindestbestand nicht gefunden' });
 
@@ -387,13 +390,16 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
       if (!nr) continue;
       articles[nr] = {
         nr,
-        name:      cols[iName]   || '',
-        group:     cols[iGroup]  || '',
-        inStock:   pf(cols[iStock]),
-        available: pf(cols[iAvail]),
-        minQty:    pf(cols[iMin]),
-        unit:      cols[iUnit]   || '',
-        weightKg:  pf(cols[iWeight]),
+        name:        cols[iName]    || '',
+        group:       cols[iGroup]   || '',
+        inStock:     pf(cols[iStock]),
+        available:   pf(cols[iAvail]),
+        minQty:      pf(cols[iMin]),
+        unit:        cols[iUnit]    || '',
+        weightKg:    pf(cols[iWeight]),
+        leadTimeDays: pf(cols[iLead]),
+        minProdQty:  pf(cols[iMinProd]),
+        isPurchased: cols[iPurchase] === '1',
       };
     }
 
@@ -408,6 +414,74 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
 });
 
 app.get('/api/articles', (req, res) => res.json(loadArticles()));
+
+// ─── MRPeasy Reorder-CSV Export ───────────────────────────────────────────────
+// Erzeugt eine CSV mit vorgeschlagenen Mindestbeständen für alle Artikel.
+// Fertigware: Ø/Monat × Ziel-Monate (Stk)
+// Rohware:    Ø/Tag × Lieferzeit (kg), aufgerundet auf Einkaufseinheit
+app.get('/api/export-reorder-csv', async (req, res) => {
+  try {
+    const cfg = loadConfig();
+    if (!cfg.shopifyDomain || !cfg.shopifyToken) return res.status(400).json({ error: 'Shopify nicht konfiguriert' });
+
+    const shopify      = new ShopifyClient(cfg.shopifyDomain, cfg.shopifyToken);
+    const days         = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const targetMonths = parseFloat(req.query.months) || cfg.targetMonths || 2;
+    const months       = days / 30;
+
+    const lineItems    = await shopify.getLineItems(days);
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
+    const partsData    = loadParts();
+    const partsMap     = partsData.mapping || {};
+
+    const rows = [['Artikelnr.', 'Artikelbezeichnung', 'Gruppe', 'Vorgeschlagener Mindestbestand', 'Einheit', 'Berechnungsgrundlage']];
+
+    // ── Fertigware: pro Shopify-SKU ──────────────────────────────────────────
+    const skuSales = {};
+    for (const item of lineItems) {
+      if (!skuSales[item.sku]) skuSales[item.sku] = { title: item.title, qty: 0 };
+      skuSales[item.sku].qty += item.qty;
+    }
+    for (const [sku, s] of Object.entries(skuSales)) {
+      const art        = artItems[sku];
+      const avgPerMonth = s.qty / months;
+      const proposed   = Math.ceil(avgPerMonth * targetMonths);
+      const name       = art ? art.name : s.title;
+      const group      = art ? art.group : 'Fertigware';
+      rows.push([sku, name, group, proposed, 'Stk.', `Ø ${avgPerMonth.toFixed(1)} Stk/Mo × ${targetMonths} Mo`]);
+    }
+
+    // ── Rohware: über Stücklisten-Mapping ────────────────────────────────────
+    const rohwareSales = {}; // rohwareNr → totalKg verkauft
+    for (const item of lineItems) {
+      const prefix = item.sku.replace(/-\d+$/, '');
+      const part   = partsMap[prefix];
+      if (!part) continue;
+      const nr = part.rohwareNr;
+      if (!rohwareSales[nr]) rohwareSales[nr] = { name: part.rohwareName, totalKg: 0 };
+      rohwareSales[nr].totalKg += item.kg;
+    }
+    for (const [nr, r] of Object.entries(rohwareSales)) {
+      const art          = artItems[nr];
+      const avgKgPerDay  = r.totalKg / days;
+      const leadTime     = art && art.leadTimeDays > 0 ? art.leadTimeDays : 1;
+      // Sicherheitspuffer: Lieferzeit × 1,5 um Schwankungen abzudecken
+      const proposed     = +(avgKgPerDay * leadTime * 1.5).toFixed(2);
+      const einheit      = art ? art.unit || 'kg' : 'kg';
+      rows.push([nr, r.name, 'Rohstoffe', proposed, einheit, `Ø ${(avgKgPerDay).toFixed(3)} kg/Tag × ${leadTime} Tage LZ × 1,5`]);
+    }
+
+    // CSV ausgeben (Semikolon-getrennt, UTF-8 BOM für Excel)
+    const csv = '\uFEFF' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="mrpeasy_mindestbestand_${new Date().toISOString().slice(0,10)}.csv"`);
+    res.send(csv);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // ─── Excel Export ─────────────────────────────────────────────────────────────
 
