@@ -435,25 +435,26 @@ app.get('/api/export-reorder-csv', async (req, res) => {
     const partsData    = loadParts();
     const partsMap     = partsData.mapping || {};
 
-    const rows = [['Artikelnr.', 'Artikelbezeichnung', 'Gruppe', 'Vorgeschlagener Mindestbestand', 'Einheit', 'Berechnungsgrundlage']];
+    // Gesammelter Output: pro Artikelnr. nur ein Eintrag (kein Duplikat)
+    const output = {}; // nr → { name, group, proposed, unit, basis }
 
-    // ── Fertigware: pro Shopify-SKU ──────────────────────────────────────────
+    // ── Fertigware: pro Shopify-SKU (nur nicht-Rohstoffe) ────────────────────
     const skuSales = {};
     for (const item of lineItems) {
       if (!skuSales[item.sku]) skuSales[item.sku] = { title: item.title, qty: 0 };
       skuSales[item.sku].qty += item.qty;
     }
     for (const [sku, s] of Object.entries(skuSales)) {
-      const art        = artItems[sku];
+      const art   = artItems[sku];
+      const group = art ? art.group : 'Fertigware';
+      if (group === 'Rohstoffe') continue; // Rohstoffe nur über BOM-Pfad
       const avgPerMonth = s.qty / months;
-      const proposed   = Math.ceil(avgPerMonth * targetMonths);
-      const name       = art ? art.name : s.title;
-      const group      = art ? art.group : 'Fertigware';
-      rows.push([sku, name, group, proposed, 'Stk.', `Ø ${avgPerMonth.toFixed(1)} Stk/Mo × ${targetMonths} Mo`]);
+      const proposed    = Math.ceil(avgPerMonth * targetMonths);
+      output[sku] = { name: art ? art.name : s.title, group, proposed, unit: 'Stk.', basis: `Ø ${avgPerMonth.toFixed(1)} Stk/Mo × ${targetMonths} Mo` };
     }
 
-    // ── Rohware: über Stücklisten-Mapping ────────────────────────────────────
-    const rohwareSales = {}; // rohwareNr → totalKg verkauft
+    // ── Rohware: über Stücklisten-Mapping (kg-basiert, dedupliziert) ─────────
+    const rohwareSales = {};
     for (const item of lineItems) {
       const prefix = item.sku.replace(/-\d+$/, '');
       const part   = partsMap[prefix];
@@ -463,13 +464,18 @@ app.get('/api/export-reorder-csv', async (req, res) => {
       rohwareSales[nr].totalKg += item.kg;
     }
     for (const [nr, r] of Object.entries(rohwareSales)) {
-      const art          = artItems[nr];
-      const avgKgPerDay  = r.totalKg / days;
-      const leadTime     = art && art.leadTimeDays > 0 ? art.leadTimeDays : 1;
-      // Sicherheitspuffer: Lieferzeit × 1,5 um Schwankungen abzudecken
-      const proposed     = +(avgKgPerDay * leadTime * 1.5).toFixed(2);
-      const einheit      = art ? art.unit || 'kg' : 'kg';
-      rows.push([nr, r.name, 'Rohstoffe', proposed, einheit, `Ø ${(avgKgPerDay).toFixed(3)} kg/Tag × ${leadTime} Tage LZ × 1,5`]);
+      const art         = artItems[nr];
+      const avgKgPerDay = r.totalKg / days;
+      const leadTime    = art && art.leadTimeDays > 0 ? art.leadTimeDays : 1;
+      const proposed    = +(avgKgPerDay * leadTime * 1.5).toFixed(2);
+      const einheit     = art ? art.unit || 'kg' : 'kg';
+      // Überschreibt ggf. einen Fertigware-Eintrag mit gleicher Nr.
+      output[nr] = { name: r.name, group: 'Rohstoffe', proposed, unit: einheit, basis: `Ø ${avgKgPerDay.toFixed(3)} kg/Tag × ${leadTime} Tage LZ × 1,5` };
+    }
+
+    const rows = [['Artikelnr.', 'Artikelbezeichnung', 'Gruppe', 'Vorgeschlagener Mindestbestand', 'Einheit', 'Berechnungsgrundlage']];
+    for (const [nr, o] of Object.entries(output)) {
+      rows.push([nr, o.name, o.group, o.proposed, o.unit, o.basis]);
     }
 
     // CSV ausgeben (Semikolon-getrennt, UTF-8 BOM für Excel)
