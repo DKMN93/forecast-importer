@@ -425,7 +425,7 @@ app.get('/api/export-reorder-csv', async (req, res) => {
     if (!cfg.shopifyDomain || !cfg.shopifyToken) return res.status(400).json({ error: 'Shopify nicht konfiguriert' });
 
     const shopify      = new ShopifyClient(cfg.shopifyDomain, cfg.shopifyToken);
-    const days         = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const days         = parseInt(req.query.days) || 120; // immer 4 Monate für Rohware-Berechnung
     const targetMonths = parseFloat(req.query.months) || cfg.targetMonths || 2;
     const months       = days / 30;
 
