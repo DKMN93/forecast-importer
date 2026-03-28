@@ -52,8 +52,14 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const LOG_FILE    = path.join(__dirname, 'update-log.json');
 
 function loadConfig() {
-  try { return JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); }
-  catch { return {}; }
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch {}
+  // Env vars überschreiben gespeicherte Werte (für Railway Deployment)
+  if (process.env.SHOPIFY_DOMAIN) cfg.shopifyDomain = process.env.SHOPIFY_DOMAIN;
+  if (process.env.SHOPIFY_TOKEN)  cfg.shopifyToken  = process.env.SHOPIFY_TOKEN;
+  if (process.env.SHOPIFY_CLIENT_ID)     cfg.shopifyClientId     = process.env.SHOPIFY_CLIENT_ID;
+  if (process.env.SHOPIFY_CLIENT_SECRET) cfg.shopifyClientSecret = process.env.SHOPIFY_CLIENT_SECRET;
+  return cfg;
 }
 
 function saveConfig(cfg) {
