@@ -467,10 +467,12 @@ app.get('/api/export-reorder-csv', async (req, res) => {
       const art         = artItems[nr];
       const avgKgPerDay = r.totalKg / days;
       const leadTime    = art && art.leadTimeDays > 0 ? art.leadTimeDays : 1;
-      const proposed    = +(avgKgPerDay * leadTime * 1.5).toFixed(2);
+      const bagSize     = art && art.weightKg > 0 ? art.weightKg : 25; // Sackgröße (20 oder 25 kg)
+      const rawKg       = avgKgPerDay * leadTime * 1.5;
+      // Aufrunden auf ganze Säcke, mindestens 1 Sack
+      const proposed    = Math.max(bagSize, Math.ceil(rawKg / bagSize) * bagSize);
       const einheit     = art ? art.unit || 'kg' : 'kg';
-      // Überschreibt ggf. einen Fertigware-Eintrag mit gleicher Nr.
-      output[nr] = { name: r.name, group: 'Rohstoffe', proposed, unit: einheit, basis: `Ø ${avgKgPerDay.toFixed(3)} kg/Tag × ${leadTime} Tage LZ × 1,5` };
+      output[nr] = { name: r.name, group: 'Rohstoffe', proposed, unit: einheit, basis: `Ø ${avgKgPerDay.toFixed(3)} kg/Tag × ${leadTime} Tage LZ × 1,5 → ${Math.ceil(rawKg/bagSize) || 1} Sack(${bagSize}kg)` };
     }
 
     const rows = [['Artikelnr.', 'Artikelbezeichnung', 'Gruppe', 'Vorgeschlagener Mindestbestand', 'Einheit', 'Berechnungsgrundlage']];
