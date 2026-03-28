@@ -1,0 +1,16 @@
+node_modules/
+
+# Sensible Daten - NIEMALS auf GitHub!
+config.json
+.env
+
+# Lokale Datendateien (werden zur Laufzeit generiert)
+stock.json
+articles.json
+parts-mapping.json
+sku-targets.json
+update-log.json
+
+# OS
+.DS_Store
+Thumbs.db
