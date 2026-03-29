@@ -241,11 +241,19 @@ app.get('/api/dashboard', async (req, res) => {
     const topByRev = Object.values(skuMap).sort((a,b) => b.revenue - a.revenue).slice(0, 10)
       .map(s => ({ ...s, kg: +s.kg.toFixed(1), revenue: +s.revenue.toFixed(2) }));
 
-    // Langsamdreher: Artikel in articles.json ohne Shopify-Verkäufe
+    // Langsamdreher: nur Fertigware mit Bestand, wo Reichweite nicht berechenbar
+    // oder > 2× Ziel-Reichweite. Rohstoffe + Verpackung werden ausgeschlossen.
     const deadStock = Object.values(artItems)
-      .filter(a => a.inStock > 0 && !skuMap[a.nr])
-      .map(a => ({ nr: a.nr, name: a.name, group: a.group, inStock: a.inStock, unit: a.unit }))
-      .slice(0, 20);
+      .filter(a => a.group === 'Fertigware' && (a.inStock || 0) > 0)
+      .map(a => {
+        const s      = skuMap[a.nr];
+        const avgPM  = s ? s.qty / months : 0;
+        const rw     = avgPM > 0 ? +(a.inStock / avgPM).toFixed(1) : null;
+        return { nr: a.nr, name: a.name, inStock: a.inStock, unit: a.unit, avgPM: +avgPM.toFixed(1), reichweite: rw };
+      })
+      .filter(a => a.reichweite === null || a.reichweite > targetMonths * 2)
+      .sort((a, b) => (b.reichweite ?? 9999) - (a.reichweite ?? 9999))
+      .slice(0, 30);
 
     // Monatlicher Verlauf (wöchentlich aus weeklySummary)
     const byBase = aggregateByBaseSku(lineItems, days / 7);
@@ -258,7 +266,7 @@ app.get('/api/dashboard', async (req, res) => {
         totalOrders:   lineItems.length,
         stockAlerts:   stockAlerts.length,
         rwAlerts,
-        deadStockCount: deadStock.length,
+        deadStockCount: deadStock.length, deadStockTarget: targetMonths * 2,
         articlesLoaded: Object.keys(artItems).length > 0,
         lastFetch:     new Date().toISOString(),
       },

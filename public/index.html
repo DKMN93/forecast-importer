@@ -226,9 +226,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div class="nav-item" onclick="showView('artikel')">
       <span class="icon">🔍</span> Artikel
     </div>
-    <div class="nav-item" onclick="showView('log')">
-      <span class="icon">📋</span> Protokoll
-    </div>
+
     <div class="nav-item" onclick="showView('settings')">
       <span class="icon">⚙️</span> Einstellungen
     </div>
@@ -351,14 +349,6 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div class="view" id="view-artikel">
       <div id="artikelContent">
         <div class="loading-overlay"><div class="spinner"></div>Lade Artikeldaten…</div>
-      </div>
-    </div>
-
-    <!-- ─── LOG VIEW ─── -->
-    <div class="view" id="view-log">
-      <div class="table-box">
-        <div class="table-box-header"><h3>Update-Protokoll</h3></div>
-        <div style="padding:20px" id="logContent"><div class="spinner"></div></div>
       </div>
     </div>
 
@@ -744,7 +734,7 @@ function renderDashboard(d) {
       ${renderTopSkusTable(d.topByKg)}
     </div>
 
-    ${d.deadStock.length ? renderDeadStock(d.deadStock) : ''}
+    ${d.deadStock.length ? renderDeadStock(d.deadStock, d.summary.deadStockTarget) : ''}
   `;
   document.getElementById('dashboardContent').innerHTML = html;
   requestAnimationFrame(() => {
@@ -753,20 +743,33 @@ function renderDashboard(d) {
   });
 }
 
-function renderDeadStock(items) {
+function renderDeadStock(items, target) {
   return `<div class="table-box" style="margin-top:20px">
     <div class="table-box-header">
-      <h3>Langsamdreher (${items.length}) — Bestand ohne Verkäufe im Zeitraum</h3>
+      <h3>Langsamdreher (${items.length}) — Fertigware mit Reichweite &gt; ${target} Mo. oder ohne Verkäufe</h3>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Artikelnr.</th><th>Name</th><th>Gruppe</th><th>Auf Lager</th><th>Einheit</th></tr></thead>
-      <tbody>${items.map(a => `<tr>
-        <td><strong>${a.nr}</strong></td>
-        <td style="font-size:0.82rem">${a.name}</td>
-        <td><span class="badge badge-muted">${a.group}</span></td>
-        <td>${a.inStock}</td>
-        <td style="color:var(--muted)">${a.unit}</td>
-      </tr>`).join('')}</tbody>
+      <thead><tr>
+        <th>Artikelnr.</th><th>Name</th><th>Auf Lager</th>
+        <th style="text-align:right">Ø Stk/Mo</th>
+        <th style="text-align:right">Reichweite</th>
+        <th>Typ</th>
+      </tr></thead>
+      <tbody>${items.map(a => {
+        const rwLabel  = a.reichweite !== null ? `${a.reichweite} Mo.` : '∞';
+        const rwColor  = a.reichweite === null ? 'var(--danger)' : 'var(--warn)';
+        const typBadge = a.reichweite === null
+          ? '<span class="badge badge-danger">Keine Verkäufe</span>'
+          : '<span class="badge badge-warn">Überbestand</span>';
+        return `<tr>
+          <td><strong>${a.nr}</strong></td>
+          <td style="font-size:0.82rem;color:var(--muted)">${a.name.substring(0,45)}</td>
+          <td>${a.inStock.toLocaleString('de')} <span style="color:var(--muted);font-size:0.72rem">${a.unit}</span></td>
+          <td style="text-align:right;color:var(--muted)">${a.avgPM > 0 ? a.avgPM : '—'}</td>
+          <td style="text-align:right;font-weight:700;color:${rwColor}">${rwLabel}</td>
+          <td>${typBadge}</td>
+        </tr>`;
+      }).join('')}</tbody>
     </table></div>
   </div>`;
 }
