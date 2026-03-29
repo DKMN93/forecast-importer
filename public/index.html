@@ -1134,6 +1134,8 @@ function renderArtikel() {
       <td style="text-align:center">${stockoutCell(a)}</td>
       <td style="text-align:center">${editField(a.nr, 'lieferzeitWochen', a.lieferzeitWochen, a.lieferzeitCustom, 'Wo.', p.globalLieferzeit)}</td>
       <td style="text-align:center">${editField(a.nr, 'targetMonths', a.targetMonths, a.targetCustom, 'Mo.', p.globalTarget)}</td>
+      <td style="text-align:right">${a.beutelPW != null && a.beutelPW > 0 ? fmt(a.beutelPW) : '<span style="color:var(--muted)">—</span>'}</td>
+      <td style="text-align:right">${a.zuProduzieren > 0 ? `<span style="color:var(--danger);font-weight:700">${a.zuProduzieren.toLocaleString('de')}</span>` : '<span style="color:var(--muted)">—</span>'}</td>
       <td style="text-align:right;font-weight:700;color:var(--accent)">${a.hasSales ? a.vorschlag.toLocaleString('de') : '—'}</td>
       <td style="text-align:center">${editField(a.nr, 'purchasePrice', a.purchasePrice ?? '', a.purchasePrice !== null, '€', '—', 70)}</td>
       <td style="text-align:right;font-size:0.85rem">${a.gebundenesKapital !== null ? fmtE(a.gebundenesKapital) : '—'}</td>
@@ -1153,6 +1155,7 @@ function renderArtikel() {
       <span style="font-size:0.78rem;color:var(--muted)">${items.length} Artikel</span>
       ${cntBestellen > 0 ? `<span class="badge badge-danger">${cntBestellen}× Jetzt bestellen</span>` : ''}
       ${cntBeobachten > 0 ? `<span class="badge badge-warn">${cntBeobachten}× Beobachten</span>` : ''}
+      ${(() => { const total = d.items.filter(a=>a.beutelPW>0).reduce((s,a)=>s+(a.beutelPW||0),0); const totalProd = d.items.reduce((s,a)=>s+(a.zuProduzieren||0),0); return total > 0 ? `<span style="font-size:0.78rem;color:var(--muted)">Ø <strong style="color:var(--text)">${Math.round(total).toLocaleString('de')} Beutel/Wo</strong>${totalProd>0?' · <strong style="color:var(--danger)">'+totalProd.toLocaleString('de')+' zu prod.</strong>':''}</span>` : ''; })()}
       <button class="btn-ghost btn-sm" onclick="loadArtikel()" style="margin-left:auto">↻</button>
       <button class="btn-ghost btn-sm" onclick="downloadCsv()">MRPeasy CSV</button>
     </div>
@@ -1173,12 +1176,14 @@ function renderArtikel() {
             <th style="text-align:center">Stockout Risk</th>
             <th style="text-align:center">Lieferzeit Wo.</th>
             <th style="text-align:center">Ziel Mo.</th>
+            <th style="text-align:right">Beutel/Wo</th>
+            <th style="text-align:right">Zu prod.</th>
             <th style="text-align:right">Vorschlag Min</th>
             <th style="text-align:center">EK-Preis €</th>
             <th style="text-align:right">Kapital</th>
             <th></th>
           </tr></thead>
-          <tbody>${rows || '<tr><td colspan="14" style="text-align:center;padding:32px;color:var(--muted)">Keine Artikel gefunden</td></tr>'}</tbody>
+          <tbody>${rows || '<tr><td colspan="16" style="text-align:center;padding:32px;color:var(--muted)">Keine Artikel gefunden</td></tr>'}</tbody>
         </table>
       </div>
     </div>`;

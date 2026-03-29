@@ -1045,12 +1045,19 @@ app.get('/api/artikel', async (req, res) => {
         : reichweiteMonate < target       ? 'warn'
         : 'ok';
 
+      const isFertigware = (art.group || '') !== 'Rohstoffe';
+      const beutelPW     = isFertigware ? +(s.qty / (days / 7)).toFixed(1) : null;
+      const zuProduzieren = isFertigware && art.minQty > 0 && bestand < art.minQty
+        ? Math.ceil(art.minQty - bestand) : 0;
+
       return {
         nr: art.nr, name: art.name, group: art.group || '',
         unit: art.unit || '', weightKg: art.weightKg || 0,
         bestand, available: art.available || 0, minQty: art.minQty || 0,
         verbrauchPM:       +verbrauchPM.toFixed(2),
         verbrauchKgPM:     +(s.kg / months).toFixed(2),
+        beutelPW,
+        zuProduzieren,
         reichweiteMonate,
         reichweiteWochen,
         stockoutRisk,
