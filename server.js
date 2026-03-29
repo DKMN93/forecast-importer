@@ -210,8 +210,10 @@ app.get('/api/dashboard', async (req, res) => {
 
     const totalKg      = +lineItems.reduce((a, b) => a + b.kg, 0).toFixed(1);
     const totalRevenue = +lineItems.reduce((a, b) => a + b.price, 0).toFixed(2);
+    const totalBeutel  = lineItems.reduce((a, b) => a + b.qty, 0);
     const avgKgMonth   = +(totalKg / months).toFixed(1);
     const avgRevMonth  = +(totalRevenue / months).toFixed(2);
+    const avgBeutelDay = +(totalBeutel / days).toFixed(1);
 
     // Lager-Alerts: Artikel unter Mindestbestand
     const stockAlerts = Object.values(artItems)
@@ -251,7 +253,7 @@ app.get('/api/dashboard', async (req, res) => {
     res.json({
       period: { days, months: +months.toFixed(1), targetMonths },
       summary: {
-        totalKg, totalRevenue, avgKgMonth, avgRevMonth,
+        totalKg, totalRevenue, avgKgMonth, avgRevMonth, totalBeutel, avgBeutelDay,
         uniqueSkus:    new Set(lineItems.map(l => l.sku)).size,
         totalOrders:   lineItems.length,
         stockAlerts:   stockAlerts.length,

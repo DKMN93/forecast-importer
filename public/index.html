@@ -694,6 +694,11 @@ function renderDashboard(d) {
         <div class="k-val">${fmt(s.totalKg)}</div>
         <div class="k-sub">Ø ${fmt(s.avgKgMonth)} KG/Monat</div>
       </div>
+      <div class="kpi accent-bg">
+        <div class="k-label">Verkaufte Beutel</div>
+        <div class="k-val">${s.totalBeutel.toLocaleString('de')}</div>
+        <div class="k-sub">Ø ${s.avgBeutelDay.toLocaleString('de')} Beutel/Tag</div>
+      </div>
       <div class="kpi">
         <div class="k-label">Aktive SKUs</div>
         <div class="k-val">${s.uniqueSkus}</div>
