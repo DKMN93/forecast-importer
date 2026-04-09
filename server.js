@@ -215,23 +215,23 @@ app.get('/api/dashboard', async (req, res) => {
     const avgRevMonth  = +(totalRevenue / months).toFixed(2);
     const avgBeutelDay = +(totalBeutel / days).toFixed(1);
 
-    // Lager-Alerts: Artikel unter Mindestbestand
+    // Lager-Alerts: Artikel unter Mindestbestand (based on available, not inStock)
     const stockAlerts = Object.values(artItems)
-      .filter(a => a.minQty > 0 && (a.inStock || 0) < a.minQty)
+      .filter(a => a.minQty > 0 && (a.available || 0) < a.minQty)
       .map(a => ({
         nr: a.nr, name: a.name, group: a.group, unit: a.unit,
-        inStock: a.inStock, minQty: a.minQty,
-        deficit: +(a.minQty - a.inStock).toFixed(1)
+        inStock: a.inStock, available: a.available, minQty: a.minQty,
+        deficit: +(a.minQty - (a.available || 0)).toFixed(1)
       }))
       .sort((a, b) => (b.deficit / b.minQty) - (a.deficit / a.minQty));
 
-    // Reichweite-Alerts: unter Ziel
+    // Reichweite-Alerts: unter Ziel (based on available)
     const rwAlerts = Object.values(skuMap)
       .filter(s => {
         const art = artItems[s.sku];
         if (!art) return false;
         const avgPM = s.qty / months;
-        const rw = avgPM > 0 ? art.inStock / avgPM : 99;
+        const rw = avgPM > 0 ? (art.available || 0) / avgPM : 99;
         return rw < targetMonths;
       }).length;
 
@@ -244,12 +244,12 @@ app.get('/api/dashboard', async (req, res) => {
     // Langsamdreher: nur Fertigware mit Bestand, wo Reichweite nicht berechenbar
     // oder > 2× Ziel-Reichweite. Rohstoffe + Verpackung werden ausgeschlossen.
     const deadStock = Object.values(artItems)
-      .filter(a => a.group === 'Fertigware' && (a.inStock || 0) > 0)
+      .filter(a => a.group === 'Fertigware' && (a.available || 0) > 0)
       .map(a => {
         const s      = skuMap[a.nr];
         const avgPM  = s ? s.qty / months : 0;
-        const rw     = avgPM > 0 ? +(a.inStock / avgPM).toFixed(1) : null;
-        return { nr: a.nr, name: a.name, inStock: a.inStock, unit: a.unit, avgPM: +avgPM.toFixed(1), reichweite: rw };
+        const rw     = avgPM > 0 ? +((a.available || 0) / avgPM).toFixed(1) : null;
+        return { nr: a.nr, name: a.name, inStock: a.inStock, available: a.available, unit: a.unit, avgPM: +avgPM.toFixed(1), reichweite: rw };
       })
       .filter(a => a.reichweite === null || a.reichweite > targetMonths * 2)
       .sort((a, b) => (b.reichweite ?? 9999) - (a.reichweite ?? 9999))
@@ -539,7 +539,7 @@ app.get('/api/export', async (req, res) => {
         const delta      = art ? proposedMin - art.minQty : '';
         const inStock    = art ? art.inStock : '';
         const avail      = art ? art.available : '';
-        const rw         = art && avgPM > 0 ? +(art.inStock / avgPM).toFixed(1) : '';
+        const rw         = art && avgPM > 0 ? +((art.available || 0) / avgPM).toFixed(1) : '';
         row.push(currentMin, delta, inStock, avail, rw);
       }
       skuRows.push(row);
@@ -566,7 +566,7 @@ app.get('/api/export', async (req, res) => {
         const inStock    = art ? art.inStock : '';
         const avail      = art ? art.available : '';
         const delta      = art ? +(proposedMinKg - art.minQty).toFixed(2) : '';
-        const rw         = art && avgKgPM > 0 ? +(art.inStock / avgKgPM).toFixed(1) : '';
+        const rw         = art && avgKgPM > 0 ? +((art.available || 0) / avgKgPM).toFixed(1) : '';
         row.push(currentMin, inStock, avail, delta, rw);
       }
       baseRows.push(row);
@@ -643,12 +643,12 @@ app.get('/api/export', async (req, res) => {
       const nr = rohInfo.rohwareNr;
       if (!planBlocks[nr]) {
         const rawArt = articlesItems[nr];
-        planBlocks[nr] = { rohwareNr: nr, rohwareName: rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.inStock || 0) : 0, fw: [] };
+        planBlocks[nr] = { rohwareNr: nr, rohwareName: rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.available || 0) : 0, fw: [] };
       }
       for (const [sku, s] of Object.entries(sales)) {
         const art = articlesItems[sku];
         const wKg = art ? (art.weightKg || 0) : 0;
-        const bst = art ? (art.inStock   || 0) : 0;
+        const bst = art ? (art.available || 0) : 0;
         planBlocks[nr].fw.push({ sku, title: s.title, bst, bestandKgEquiv: bst * wKg, kgPM: s.kg / months, totalKg: s.kg });
       }
     }
@@ -661,11 +661,11 @@ app.get('/api/export', async (req, res) => {
       const nr = rohInfo.rohwareNr;
       if (!planBlocks[nr]) {
         const rawArt = articlesItems[nr];
-        planBlocks[nr] = { rohwareNr: nr, rohwareName: rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.inStock || 0) : 0, fw: [] };
+        planBlocks[nr] = { rohwareNr: nr, rohwareName: rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.available || 0) : 0, fw: [] };
       }
-      if (!planBlocks[nr].fw.some(f => f.sku === artNr) && (art.inStock || 0) > 0) {
+      if (!planBlocks[nr].fw.some(f => f.sku === artNr) && (art.available || 0) > 0) {
         const wKg = art.weightKg || 0;
-        planBlocks[nr].fw.push({ sku: artNr, title: art.name, bst: art.inStock, bestandKgEquiv: art.inStock * wKg, kgPM: 0, totalKg: 0 });
+        planBlocks[nr].fw.push({ sku: artNr, title: art.name, bst: art.available, bestandKgEquiv: (art.available || 0) * wKg, kgPM: 0, totalKg: 0 });
       }
     }
 
@@ -802,7 +802,7 @@ app.get('/api/planung', async (req, res) => {
       const rawArt = artItems[nr];
       blocks[nr] = {
         rohwareNr: nr, rohwareName: rohInfo.rohwareName,
-        rohwareArtikel: { nr, name: rawArt ? rawArt.name : rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.inStock || 0) : 0 },
+        rohwareArtikel: { nr, name: rawArt ? rawArt.name : rohInfo.rohwareName, bestandKg: rawArt ? (rawArt.available || 0) : 0 },
         grossgebinde: [], fertigware: [],
       };
     };
@@ -816,7 +816,7 @@ app.get('/api/planung', async (req, res) => {
       for (const [sku, s] of Object.entries(sales)) {
         const art = artItems[sku];
         const wKg = art ? (art.weightKg || 0) : 0;
-        const bst = art ? (art.inStock   || 0) : 0;
+        const bst = art ? (art.available || 0) : 0;
         const entry = {
           sku, title: s.title, bestand: bst, weightKg: wKg,
           bestandKgEquiv:   +(bst * wKg).toFixed(2),
@@ -838,10 +838,10 @@ app.get('/api/planung', async (req, res) => {
       const nr = rohInfo.rohwareNr;
       initBlock(nr, rohInfo);
       const pool = isGrossgebinde(artNr) ? blocks[nr].grossgebinde : blocks[nr].fertigware;
-      if (!pool.some(f => f.sku === artNr) && (art.inStock || 0) > 0) {
+      if (!pool.some(f => f.sku === artNr) && (art.available || 0) > 0) {
         const wKg = art.weightKg || 0;
-        pool.push({ sku: artNr, title: art.name, bestand: art.inStock, weightKg: wKg,
-          bestandKgEquiv: +(art.inStock * wKg).toFixed(2), verkaufProMonat: 0, kgProMonat: 0, totalKg: 0 });
+        pool.push({ sku: artNr, title: art.name, bestand: art.available, weightKg: wKg,
+          bestandKgEquiv: +((art.available || 0) * wKg).toFixed(2), verkaufProMonat: 0, kgProMonat: 0, totalKg: 0 });
       }
     }
 
@@ -1012,7 +1012,7 @@ app.get('/api/artikel', async (req, res) => {
       const verbrauch   = isKg ? s.kg : s.qty;
       const verbrauchPM = verbrauch / months;
       const verbrauchPW = verbrauchPM / 4.33;
-      const bestand     = art.inStock || 0;
+      const bestand     = art.available || 0;
 
       // Per-SKU Overrides oder Global-Default
       const target        = artSku.targetMonths     ?? globalTarget;

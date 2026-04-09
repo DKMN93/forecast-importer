@@ -245,6 +245,8 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div style="display:flex;align-items:center;gap:12px">
       <span style="font-size:0.78rem;color:var(--muted)">Zeitraum:</span>
       <select class="period-select" id="periodSelect" onchange="onPeriodChange(this.value)">
+        <option value="7">7 Tage</option>
+        <option value="14">14 Tage</option>
         <option value="30">30 Tage</option>
         <option value="60">60 Tage</option>
         <option value="90" selected>90 Tage</option>
