@@ -258,6 +258,30 @@ app.get('/api/dashboard', async (req, res) => {
     // Monatlicher Verlauf (wöchentlich aus weeklySummary)
     const byBase = aggregateByBaseSku(lineItems, days / 7);
 
+    // Produktionsklassen: verkaufte Beutel + anstehende Produktionszeit pro Abfüllklasse
+    const klassenMap = {};
+    for (const [sku, s] of Object.entries(skuMap)) {
+      const art = artItems[sku];
+      if (!art || !art.abfuellklasse) continue;
+      const kl = art.abfuellklasse;
+      if (!klassenMap[kl]) klassenMap[kl] = { klasse: kl, fuellrate: art.fuellrateProStunde || 0, beutelVerkauft: 0, zuProduzieren: 0 };
+      klassenMap[kl].beutelVerkauft += s.qty;
+      const deficit = art.minQty > 0 && (art.available || 0) < art.minQty
+        ? Math.ceil(art.minQty - (art.available || 0)) : 0;
+      klassenMap[kl].zuProduzieren += deficit;
+    }
+    const produktionsklassen = Object.values(klassenMap)
+      .filter(k => k.beutelVerkauft > 0 || k.zuProduzieren > 0)
+      .map(k => ({
+        klasse:            k.klasse,
+        fuellrate:         k.fuellrate,
+        beutelVerkauft:    k.beutelVerkauft,
+        beutelProTag:      +(k.beutelVerkauft / days).toFixed(1),
+        zuProduzieren:     k.zuProduzieren,
+        produktionsstunden: k.fuellrate > 0 ? +(k.zuProduzieren / k.fuellrate).toFixed(1) : null,
+      }))
+      .sort((a, b) => a.klasse.localeCompare(b.klasse));
+
     res.json({
       period: { days, months: +months.toFixed(1), targetMonths },
       summary: {
@@ -276,6 +300,7 @@ app.get('/api/dashboard', async (req, res) => {
       stockAlerts: stockAlerts.slice(0, 20),
       deadStock,
       rohstoffe: byBase.slice(0, 20),
+      produktionsklassen,
     });
   } catch (e) {
     console.error(e);
@@ -390,6 +415,8 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
     const iLead     = idx('Lieferzeit');
     const iMinProd  = idx('Minimale Herstellmenge');
     const iPurchase = idx('beschaffter Artikel');
+    const iAbfuell  = idx('Abfüllklasse');
+    const iFuell    = idx('Füllrate Plan pro Stunde');
 
     if (iNr === -1 || iMin === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Mindestbestand nicht gefunden' });
 
@@ -410,6 +437,8 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
         leadTimeDays: pf(cols[iLead]),
         minProdQty:  pf(cols[iMinProd]),
         isPurchased: cols[iPurchase] === '1',
+        abfuellklasse:     iAbfuell >= 0 ? (cols[iAbfuell] || '') : '',
+        fuellrateProStunde: iFuell   >= 0 ? pf(cols[iFuell])      : 0,
       };
     }
 
