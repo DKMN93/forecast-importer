@@ -771,7 +771,10 @@ function renderProduktionsklassen(klassen) {
     const stdVal    = k.produktionsstunden !== null
       ? `${k.produktionsstunden.toLocaleString('de')} Std.`
       : '—';
-    const rateLabel = k.fuellrate > 0 ? `${k.fuellrate} Beutel/h` : 'Rate n.v.';
+    const rateLabel   = k.fuellrate > 0 ? `${k.fuellrate} Beutel/h` : 'Rate n.v.';
+    const targetLabel = k.targetMonths
+      ? `Ziel (${k.targetMonths} Mo.): ${k.zielbestand.toLocaleString('de')} Stk.`
+      : '';
     return `
     <div class="klassen-card">
       <div class="kl-title">Abfüllklasse</div>
@@ -788,6 +791,7 @@ function renderProduktionsklassen(klassen) {
         <span class="kl-lbl">Zu produzieren</span>
         <span class="kl-val ${prodColor}">${k.zuProduzieren.toLocaleString('de')} Stk.</span>
       </div>
+      ${targetLabel ? `<div class="kl-row"><span class="kl-lbl" style="color:var(--muted);font-size:0.7rem">${targetLabel}</span></div>` : ''}
       <div class="kl-row">
         <span class="kl-lbl">Produktionszeit</span>
         <span class="kl-val ${stdColor}">${stdVal}</span>

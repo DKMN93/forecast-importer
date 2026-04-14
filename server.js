@@ -258,27 +258,32 @@ app.get('/api/dashboard', async (req, res) => {
     // Monatlicher Verlauf (wöchentlich aus weeklySummary)
     const byBase = aggregateByBaseSku(lineItems, days / 7);
 
-    // Produktionsklassen: verkaufte Beutel + anstehende Produktionszeit pro Abfüllklasse
+    // Produktionsklassen: verkaufte Beutel + dynamische Produktionszeit pro Abfüllklasse
+    // zuProduzieren = MAX(0, Zielbestand − verfügbar), wobei Zielbestand = Ø/Monat × targetMonths
     const klassenMap = {};
     for (const [sku, s] of Object.entries(skuMap)) {
       const art = artItems[sku];
       if (!art || !art.abfuellklasse) continue;
       const kl = art.abfuellklasse;
-      if (!klassenMap[kl]) klassenMap[kl] = { klasse: kl, fuellrate: art.fuellrateProStunde || 0, beutelVerkauft: 0, zuProduzieren: 0 };
+      if (!klassenMap[kl]) klassenMap[kl] = { klasse: kl, fuellrate: art.fuellrateProStunde || 0, beutelVerkauft: 0, zuProduzieren: 0, zielbestand: 0 };
       klassenMap[kl].beutelVerkauft += s.qty;
-      const deficit = art.minQty > 0 && (art.available || 0) < art.minQty
-        ? Math.ceil(art.minQty - (art.available || 0)) : 0;
+      const avgPerMonth = s.qty / months;
+      const sollBestand = avgPerMonth * targetMonths;
+      const deficit = Math.max(0, Math.ceil(sollBestand - (art.available || 0)));
       klassenMap[kl].zuProduzieren += deficit;
+      klassenMap[kl].zielbestand   += Math.ceil(sollBestand);
     }
     const produktionsklassen = Object.values(klassenMap)
       .filter(k => k.beutelVerkauft > 0 || k.zuProduzieren > 0)
       .map(k => ({
-        klasse:            k.klasse,
-        fuellrate:         k.fuellrate,
-        beutelVerkauft:    k.beutelVerkauft,
-        beutelProTag:      +(k.beutelVerkauft / days).toFixed(1),
-        zuProduzieren:     k.zuProduzieren,
+        klasse:             k.klasse,
+        fuellrate:          k.fuellrate,
+        beutelVerkauft:     k.beutelVerkauft,
+        beutelProTag:       +(k.beutelVerkauft / days).toFixed(1),
+        zielbestand:        k.zielbestand,
+        zuProduzieren:      k.zuProduzieren,
         produktionsstunden: k.fuellrate > 0 ? +(k.zuProduzieren / k.fuellrate).toFixed(1) : null,
+        targetMonths,
       }))
       .sort((a, b) => a.klasse.localeCompare(b.klasse));
 
