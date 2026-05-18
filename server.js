@@ -364,39 +364,48 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
 
     // Sprache erkennen (DE oder EN)
     const isDE = headers.includes('Artikelnr.');
-    const skuCol   = isDE ? 'Artikelnr.'       : 'Part No.';
-    const stockCol = isDE ? 'Auf Lager'         : 'In stock';
-    const availCol = isDE ? 'Verfügbar'         : 'Available';
-    const nameCol  = isDE ? 'Artikelbezeichnung': 'Part description';
-    const unitCol  = isDE ? 'Maßeinheit'        : 'UoM';
-    const weightCol = 'Gewicht in kg';
-
     const idx = name => headers.indexOf(name);
-    const iSku    = idx(skuCol);
-    const iStock  = idx(stockCol);
-    const iAvail  = idx(availCol);
-    const iName   = idx(nameCol);
-    const iUnit   = idx(unitCol);
-    const iWeight = idx(weightCol);
+    const iSku      = idx(isDE ? 'Artikelnr.'        : 'Part No.');
+    const iStock    = idx(isDE ? 'Auf Lager'          : 'In stock');
+    const iAvail    = idx(isDE ? 'Verfügbar'          : 'Available');
+    const iName     = idx(isDE ? 'Artikelbezeichnung' : 'Part description');
+    const iUnit     = idx(isDE ? 'Maßeinheit'         : 'UoM');
+    const iWeight   = idx('Gewicht in kg');
+    const iStandort = idx('Standort'); // "Main site" vs "Amazon FBA" (= Transitlager)
 
     if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes CSV-Format' });
 
-    // Pro SKU aggregieren (mehrere Chargen/Lots addieren)
-    const stock = {};
+    // Pro SKU + Standort aggregieren — ein Upload deckt alle Lager ab
+    const stockMain    = {};
+    const stockTransit = {};
+
     for (let i = 1; i < lines.length; i++) {
-      const cols = parseRow(lines[i]);
-      const sku = cols[iSku];
+      const cols    = parseRow(lines[i]);
+      const sku     = cols[iSku];
       if (!sku) continue;
-      const inStock = parseFloat((cols[iStock] || '0').replace(',', '.')) || 0;
-      const avail   = parseFloat((cols[iAvail]  || '0').replace(',', '.')) || 0;
-      const weight  = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
-      if (!stock[sku]) stock[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
-      stock[sku].inStock   += inStock;
-      stock[sku].available += avail;
+      const inStock  = parseFloat((cols[iStock]  || '0').replace(',', '.')) || 0;
+      const avail    = parseFloat((cols[iAvail]  || '0').replace(',', '.')) || 0;
+      const weight   = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
+      const standort = iStandort >= 0 ? cols[iStandort] : 'Main site';
+
+      // Standort "Amazon FBA" in MRPeasy = unser Transitlager (für Amazon vorbereitete Ware)
+      const target = standort === 'Amazon FBA' ? stockTransit : stockMain;
+      if (!target[sku]) target[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
+      target[sku].inStock   += inStock;
+      target[sku].available += avail;
     }
 
-    fs.writeFileSync(STOCK_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), items: stock }, null, 2));
-    res.json({ ok: true, skuCount: Object.keys(stock).length, language: isDE ? 'DE' : 'EN' });
+    const now = new Date().toISOString();
+    fs.writeFileSync(STOCK_FILE,         JSON.stringify({ updatedAt: now, items: stockMain    }, null, 2));
+    fs.writeFileSync(TRANSIT_STOCK_FILE, JSON.stringify({ updatedAt: now, items: stockTransit }, null, 2));
+
+    res.json({
+      ok: true,
+      skuCount:        Object.keys(stockMain).length,
+      mainSkuCount:    Object.keys(stockMain).length,
+      transitSkuCount: Object.keys(stockTransit).length,
+      language: isDE ? 'DE' : 'EN',
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
