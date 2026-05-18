@@ -328,11 +328,26 @@ function parseMrpCsv(buffer) {
 
 // ─── MRPeasy CSV Upload ───────────────────────────────────────────────────────
 
-const STOCK_FILE = path.join(__dirname, 'stock.json');
+const STOCK_FILE         = path.join(__dirname, 'stock.json');
+const TRANSIT_STOCK_FILE = path.join(__dirname, 'stock-transit.json');
+const FBA_STOCK_FILE     = path.join(__dirname, 'fba-stock.json');
+const FBA_SHIPMENTS_FILE = path.join(__dirname, 'fba-shipments.json');
 
 function loadStock() {
   try { return JSON.parse(fs.readFileSync(STOCK_FILE, 'utf8')); }
   catch { return {}; }
+}
+function loadTransitStock() {
+  try { return JSON.parse(fs.readFileSync(TRANSIT_STOCK_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function loadFbaStock() {
+  try { return JSON.parse(fs.readFileSync(FBA_STOCK_FILE, 'utf8')); }
+  catch { return {}; }
+}
+function loadFbaShipments() {
+  try { return JSON.parse(fs.readFileSync(FBA_SHIPMENTS_FILE, 'utf8')); }
+  catch { return { shipments: [], inTransit: {} }; }
 }
 
 app.post('/api/upload-stock', upload.single('file'), (req, res) => {
@@ -422,6 +437,7 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
     const iPurchase = idx('beschaffter Artikel');
     const iAbfuell  = idx('Abfüllklasse');
     const iFuell    = idx('Füllrate Plan pro Stunde');
+    const iActive   = idx('ACTIVE');
 
     if (iNr === -1 || iMin === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Mindestbestand nicht gefunden' });
 
@@ -444,6 +460,7 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
         isPurchased: cols[iPurchase] === '1',
         abfuellklasse:     iAbfuell >= 0 ? (cols[iAbfuell] || '') : '',
         fuellrateProStunde: iFuell   >= 0 ? pf(cols[iFuell])      : 0,
+        active:      iActive >= 0 ? (cols[iActive] || '').trim().toLowerCase() === 'ja' : false,
       };
     }
 
@@ -1140,6 +1157,323 @@ app.get('/api/artikel', async (req, res) => {
 
 app.get('/api/log', (req, res) => {
   res.json(loadLog());
+});
+
+// ─── Transit Lager Upload ─────────────────────────────────────────────────────
+
+app.post('/api/upload-stock-transit', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
+    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: 'Leere Datei' });
+    const parseRow = l => l.split(';').map(v => v.replace(/^"|"$/g, '').trim());
+    const headers = parseRow(lines[0]);
+    const idx = name => headers.indexOf(name);
+    const isDE = headers.includes('Artikelnr.');
+    const iSku    = idx(isDE ? 'Artikelnr.'        : 'Part No.');
+    const iStock  = idx(isDE ? 'Auf Lager'          : 'In stock');
+    const iAvail  = idx(isDE ? 'Verfügbar'          : 'Available');
+    const iName   = idx(isDE ? 'Artikelbezeichnung' : 'Part description');
+    const iUnit   = idx(isDE ? 'Maßeinheit'         : 'UoM');
+    const iWeight = idx('Gewicht in kg');
+    if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes Format' });
+    const stock = {};
+    for (let i = 1; i < lines.length; i++) {
+      const cols = parseRow(lines[i]);
+      const sku = cols[iSku];
+      if (!sku) continue;
+      const inStock = parseFloat((cols[iStock] || '0').replace(',', '.')) || 0;
+      const avail   = parseFloat((cols[iAvail]  || '0').replace(',', '.')) || 0;
+      const weight  = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
+      if (!stock[sku]) stock[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
+      stock[sku].inStock   += inStock;
+      stock[sku].available += avail;
+    }
+    fs.writeFileSync(TRANSIT_STOCK_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), items: stock }, null, 2));
+    res.json({ ok: true, skuCount: Object.keys(stock).length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/stock-transit', (req, res) => res.json(loadTransitStock()));
+
+// ─── Sellerboard FBA Lager Upload (XLSX) ─────────────────────────────────────
+
+app.post('/api/upload-sellerboard-lager', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
+    const wb = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (rows.length < 2) return res.status(400).json({ error: 'Datei leer oder ungültig' });
+
+    // Normalize headers: strip newlines/extra whitespace for fuzzy matching
+    const normH = h => String(h).toLowerCase().replace(/[\n\r\s]+/g, ' ').trim();
+    const headers = rows[0].map(h => normH(String(h)));
+    const findCol = (...kws) => headers.findIndex(h => kws.every(kw => h.includes(kw.toLowerCase())));
+
+    const iSku        = findCol('sku');
+    const iAsin       = findCol('asin');
+    const iTitle      = findCol('title');
+    const iStock      = findCol('fba/fbm stock');
+    const iVelocity   = findCol('estimated', 'velocity');
+    const iDaysLeft   = findCol('days', 'stock', 'left');
+    const iRecommended = findCol('recommended', 'quantity', 'reorder');
+    const iSentToFba  = findCol('sent', 'fba');
+    const iShipIn     = findCol('recommended', 'ship-in');
+
+    if (iSku === -1) return res.status(400).json({ error: 'SKU-Spalte nicht gefunden' });
+    if (iStock === -1) return res.status(400).json({ error: 'FBA/FBM Stock-Spalte nicht gefunden' });
+
+    const pf = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; };
+
+    const items = {};
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const sku = String(row[iSku] || '').trim();
+      if (!sku || !sku.toUpperCase().endsWith('-FBA')) continue;
+      items[sku] = {
+        sku,
+        asin:              String(row[iAsin]  || '').trim(),
+        title:             String(row[iTitle] || '').trim().substring(0, 80),
+        fbaStock:          pf(row[iStock]),
+        velocity:          iVelocity    >= 0 ? pf(row[iVelocity])    : 0,
+        daysLeft:          iDaysLeft    >= 0 ? pf(row[iDaysLeft])    : 0,
+        recommendedReorder: iRecommended >= 0 ? pf(row[iRecommended]) : 0,
+        sentToFba:         iSentToFba   >= 0 ? pf(row[iSentToFba])   : 0,
+        recommendedShipIn: iShipIn      >= 0 ? pf(row[iShipIn])      : 0,
+      };
+    }
+
+    fs.writeFileSync(FBA_STOCK_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), items }, null, 2));
+    res.json({ ok: true, skuCount: Object.keys(items).length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Sellerboard Sendungen Upload (XLSX) ─────────────────────────────────────
+
+app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
+    const wb = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    if (rows.length < 2) return res.status(400).json({ error: 'Datei leer' });
+
+    const normH = h => String(h).toLowerCase().replace(/[\n\r\s]+/g, ' ').trim();
+    const headers = rows[0].map(h => normH(String(h)));
+    const findCol = (...kws) => headers.findIndex(h => kws.every(kw => h.includes(kw)));
+
+    const iShipId   = findCol('shipment id');
+    const iProducts = findCol('products');
+    const iShipped  = findCol('units shipped');
+    const iReceived = findCol('units received');
+    const iStatus   = findCol('status');
+    const iDate     = findCol('date');
+
+    if (iShipId === -1 || iProducts === -1) return res.status(400).json({ error: 'Unbekanntes Shipments-Format' });
+
+    const pf = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; };
+    const ACTIVE_STATUSES = ['RECEIVING', 'WORKING', 'SHIPPED', 'IN_TRANSIT'];
+
+    const shipments = [];
+    let current = null;
+
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      const shipId   = String(row[iShipId]   || '').trim();
+      const products = String(row[iProducts] || '').trim();
+      const status   = String(row[iStatus]   || '').trim().toUpperCase();
+
+      if (shipId.startsWith('FBA')) {
+        current = { shipmentId: shipId, status: status || '', date: String(row[iDate] || '').trim(), products: [] };
+        shipments.push(current);
+      }
+
+      if (!current) continue;
+
+      // Update status if found on a later row for same shipment
+      if (!shipId && status && !current.status) current.status = status;
+      if (!shipId && status && ACTIVE_STATUSES.includes(status)) current.status = status;
+
+      // Product line: "Title/ASIN/SKU" — SKU is after the last "/"
+      if (products.includes('/')) {
+        const parts = products.split('/');
+        const sku = parts[parts.length - 1].trim();
+        if (sku && sku.length > 3 && !sku.startsWith('Selected')) {
+          current.products.push({ sku, shipped: iShipped >= 0 ? pf(row[iShipped]) : 0, received: iReceived >= 0 ? pf(row[iReceived]) : 0 });
+        }
+      }
+    }
+
+    // Build per-SKU inTransit index for active shipments
+    const inTransit = {};
+    for (const s of shipments) {
+      if (!ACTIVE_STATUSES.includes(s.status)) continue;
+      for (const p of s.products) {
+        if (!inTransit[p.sku]) inTransit[p.sku] = { shipped: 0, received: 0 };
+        inTransit[p.sku].shipped  += p.shipped;
+        inTransit[p.sku].received += p.received;
+      }
+    }
+
+    fs.writeFileSync(FBA_SHIPMENTS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), shipments, inTransit }, null, 2));
+    res.json({ ok: true, shipmentCount: shipments.length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── FBA Wochenplanung ────────────────────────────────────────────────────────
+// Lead times: 7 Tage Produktion + 14 Tage Amazon Einlagerung = 21 Tage gesamt
+
+const FBA_PROD_DAYS   = 7;
+const FBA_AMAZON_DAYS = 14;
+const FBA_LEAD_TOTAL  = FBA_PROD_DAYS + FBA_AMAZON_DAYS;
+
+app.get('/api/fba-planung', (req, res) => {
+  try {
+    const fbaData      = loadFbaStock();
+    const fbaItems     = fbaData.items || {};
+    const shipData     = loadFbaShipments();
+    const inTransit    = shipData.inTransit || {};
+    const transitData  = loadTransitStock();
+    const transitItems = (transitData.items) || {};
+    const mainData     = loadStock();
+    const mainItems    = (mainData.items) || {};
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
+
+    const result = [];
+
+    for (const [skuFba, fba] of Object.entries(fbaItems)) {
+      const skuBase = skuFba.replace(/-FBA$/i, '');
+      const transit  = transitItems[skuBase] || { available: 0, inStock: 0 };
+      const main     = mainItems[skuBase]    || { available: 0, inStock: 0 };
+      const art      = artItems[skuBase]     || null;
+      const trData   = inTransit[skuFba]     || { shipped: 0, received: 0 };
+
+      const unitsEnRoute = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
+      const velocity = fba.velocity > 0 ? fba.velocity
+        : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
+
+      const pipelineTotal = fba.fbaStock + transit.available + unitsEnRoute;
+      const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
+
+      const versandEmpfehlung = Math.max(0, fba.recommendedReorder - unitsEnRoute);
+      const versandMoeglich   = Math.min(versandEmpfehlung, transit.available);
+      const transitShortfall  = Math.max(0, versandEmpfehlung - transit.available);
+      const fbmMinQty         = art ? (art.minQty || 0) : 0;
+      const mainOverstock     = Math.max(0, main.available - fbmMinQty);
+      const ausMainEntnehmen  = Math.min(transitShortfall, mainOverstock);
+      const zuProduzierenFba  = Math.max(0, transitShortfall - ausMainEntnehmen);
+
+      const status = pipelineDays < FBA_LEAD_TOTAL       ? 'kritisch'
+                   : pipelineDays < FBA_LEAD_TOTAL * 2   ? 'warn' : 'ok';
+
+      result.push({
+        skuFba, skuBase,
+        name:  fba.title || (art ? art.name : skuBase),
+        asin:  fba.asin || '',
+        fbaStock:    fba.fbaStock,
+        velocity:    +velocity.toFixed(2),
+        daysLeft:    fba.daysLeft,
+        unitsEnRoute,
+        transitStock:    transit.available,
+        mainStock:       main.available,
+        fbmMinQty,
+        mainOverstock,
+        pipelineTotal:   Math.round(pipelineTotal),
+        pipelineDays:    pipelineDays < 999 ? +pipelineDays.toFixed(1) : 999,
+        versandEmpfehlung: Math.round(versandEmpfehlung),
+        versandMoeglich:   Math.round(versandMoeglich),
+        transitShortfall:  Math.round(transitShortfall),
+        ausMainEntnehmen:  Math.round(ausMainEntnehmen),
+        zuProduzierenFba:  Math.round(zuProduzierenFba),
+        status,
+      });
+    }
+
+    const stOrd = { kritisch: 0, warn: 1, ok: 2 };
+    result.sort((a, b) => (stOrd[a.status] - stOrd[b.status]) || (a.pipelineDays - b.pipelineDays));
+
+    res.json({
+      updatedAt: { fbaStock: fbaData.updatedAt || null, shipments: shipData.updatedAt || null, transit: transitData.updatedAt || null, main: mainData.updatedAt || null },
+      leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL },
+      summary: {
+        total:    result.length,
+        kritisch: result.filter(r => r.status === 'kritisch').length,
+        warn:     result.filter(r => r.status === 'warn').length,
+        ok:       result.filter(r => r.status === 'ok').length,
+        zuVersenden:   result.reduce((s, r) => s + r.versandMoeglich, 0),
+        zuProduzieren: result.reduce((s, r) => s + r.zuProduzierenFba, 0),
+      },
+      items: result,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Aktive Artikel (ACTIVE = ja) ────────────────────────────────────────────
+
+app.get('/api/active-articles', (req, res) => {
+  try {
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
+    const mainData     = loadStock();
+    const mainItems    = mainData.items || {};
+    const transitData  = loadTransitStock();
+    const transitItems = transitData.items || {};
+    const fbaData      = loadFbaStock();
+    const fbaItems     = fbaData.items || {};
+
+    const result = [];
+    for (const [nr, art] of Object.entries(artItems)) {
+      if (!art.active) continue;
+      const skuFba      = nr + '-FBA';
+      const main        = mainItems[nr]      || { available: 0 };
+      const transit     = transitItems[nr]   || { available: 0 };
+      const fba         = fbaItems[skuFba]   || null;
+      const mainStock   = main.available    || 0;
+      const transitStock = transit.available || 0;
+      const fbaStock    = fba ? fba.fbaStock : null;
+      const totalStock  = mainStock + transitStock + (fbaStock || 0);
+      const unterMin    = art.minQty > 0 && mainStock < art.minQty;
+
+      result.push({
+        nr, name: art.name, group: art.group || '', unit: art.unit || '',
+        mainStock, transitStock, fbaStock, hasFba: !!fba, totalStock,
+        minQty: art.minQty || 0, unterMin,
+        status: totalStock === 0 ? 'nullbestand' : 'ok',
+      });
+    }
+
+    result.sort((a, b) => {
+      if (a.status !== b.status) return a.status === 'nullbestand' ? -1 : 1;
+      if (a.unterMin !== b.unterMin) return a.unterMin ? -1 : 1;
+      return a.nr.localeCompare(b.nr);
+    });
+
+    res.json({
+      total:       result.length,
+      nullbestand: result.filter(r => r.status === 'nullbestand').length,
+      unterMin:    result.filter(r => r.unterMin).length,
+      updatedAt:   { articles: artData.updatedAt || null, main: mainData.updatedAt || null, transit: transitData.updatedAt || null, fba: fbaData.updatedAt || null },
+      items: result,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ─── Server starten ───────────────────────────────────────────────────────────

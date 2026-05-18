@@ -218,6 +218,27 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
   .charts-row { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
 }
+
+/* ── FBA Planung ── */
+.fba-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; border-left: 4px solid var(--border); }
+.fba-block.kritisch { border-left-color: var(--danger); }
+.fba-block.warn     { border-left-color: var(--warn); }
+.fba-block.ok       { border-left-color: var(--success); }
+.fba-block-header { padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface2); border-bottom: 1px solid var(--border); }
+.fba-lager-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.fba-lager-cell { padding: 16px 20px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.fba-lager-cell:last-child { border-right: none; }
+.fba-lager-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; }
+.fba-lager-val { font-size: 1.6rem; font-weight: 700; color: var(--text); line-height: 1; }
+.fba-lager-sub { font-size: 0.73rem; color: var(--muted); margin-top: 4px; }
+.fba-actions { padding: 14px 20px; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; background: var(--surface); }
+.fba-action-label { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-bottom: 4px; }
+.fba-action-val { font-size: 1.05rem; font-weight: 700; }
+.fba-action-val.danger  { color: var(--danger); }
+.fba-action-val.warn    { color: var(--warn); }
+.fba-action-val.success { color: var(--success); }
+.fba-action-val.muted   { color: var(--muted); font-weight: 400; }
+.fba-import-bar { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 20px; margin-bottom: 20px; display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.78rem; color: var(--muted); align-items: center; }
 </style>
 </head>
 <body>
@@ -239,6 +260,12 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       <span class="icon">🔍</span> Artikel
     </div>
 
+    <div class="nav-item" onclick="showView('fba')">
+      <span class="icon">🚀</span> FBA Planung
+    </div>
+    <div class="nav-item" onclick="showView('aktiv')">
+      <span class="icon">📋</span> Aktive Artikel
+    </div>
     <div class="nav-item" onclick="showView('settings')">
       <span class="icon">⚙️</span> Einstellungen
     </div>
@@ -366,6 +393,20 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       </div>
     </div>
 
+    <!-- ─── FBA PLANUNG VIEW ─── -->
+    <div class="view" id="view-fba">
+      <div id="fbaContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade FBA Planungsdaten…</div>
+      </div>
+    </div>
+
+    <!-- ─── AKTIVE ARTIKEL VIEW ─── -->
+    <div class="view" id="view-aktiv">
+      <div id="aktivContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade Aktive Artikel…</div>
+      </div>
+    </div>
+
     <!-- ─── SETTINGS VIEW ─── -->
     <div class="view" id="view-settings">
       <div style="max-width:520px">
@@ -425,8 +466,20 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <input type="file" accept=".csv" style="display:none" onchange="uploadArticles(this)">
             </label>
             <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen hochladen (stock_lots CSV aus MRPeasy)</div>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen hochladen (stock_lots CSV — MAIN Lager)</div>
               <input type="file" accept=".csv" style="display:none" onchange="uploadStock(this)">
+            </label>
+            <label>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen hochladen (stock_lots CSV — Transitlager)</div>
+              <input type="file" accept=".csv" style="display:none" onchange="uploadStockTransit(this)">
+            </label>
+            <label>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Lager XLSX — FBA Bestand</div>
+              <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardLager(this)">
+            </label>
+            <label>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Sendungen XLSX — FBA Shipments</div>
+              <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardShipments(this)">
             </label>
           </div>
         </div>
@@ -481,6 +534,7 @@ async function api(path, opts = {}) {
 const viewTitles = {
   setup: 'Einrichtung', dashboard: 'Dashboard',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
+  fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
   log: 'Update-Protokoll', settings: 'Einstellungen'
 };
 
@@ -498,6 +552,8 @@ function showView(name) {
   if (name === 'dashboard' && !dashData) loadDashboard();
   if (name === 'planung')    loadPlanung();
   if (name === 'artikel')    loadArtikel();
+  if (name === 'fba')        loadFbaPlanung();
+  if (name === 'aktiv')      loadAktiveArtikel();
   if (name === 'log')        loadLog();
   if (name === 'settings')   loadSettings();
 }
@@ -1339,6 +1395,245 @@ async function saveSettings() {
   }
 }
 
+// ─── Transit & Sellerboard Uploads ───────────────────────────────────────────
+async function uploadStockTransit(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Transitlager wird geladen…');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload-stock-transit', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
+    toast(`✓ Transitlager: ${data.skuCount} SKUs importiert`);
+    input.value = '';
+  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
+}
+
+async function uploadSellerboardLager(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Sellerboard FBA Lager wird importiert…');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload-sellerboard-lager', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
+    toast(`✓ FBA Lager: ${data.skuCount} SKUs importiert`);
+    input.value = '';
+  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
+}
+
+async function uploadSellerboardShipments(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Sellerboard Sendungen werden importiert…');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload-sellerboard-shipments', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
+    toast(`✓ ${data.shipmentCount} Sendungen importiert`);
+    input.value = '';
+  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
+}
+
+// ─── FBA Planung ──────────────────────────────────────────────────────────────
+async function loadFbaPlanung() {
+  document.getElementById('fbaContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade FBA Planungsdaten…</div>';
+  try {
+    const data = await api('/fba-planung');
+    renderFbaPlanung(data);
+    document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
+  } catch (e) {
+    document.getElementById('fbaContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
+  }
+}
+
+function renderFbaPlanung(d) {
+  const fmt     = v => v != null && v !== 999 ? Number(v).toLocaleString('de') : '—';
+  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : 'nicht importiert';
+  const statusBadge = s => {
+    if (s === 'kritisch') return '<span class="badge badge-danger">KRITISCH</span>';
+    if (s === 'warn')     return '<span class="badge badge-warn">WARNUNG</span>';
+    return '<span class="badge badge-ok">OK</span>';
+  };
+
+  const importBar = `
+    <div class="fba-import-bar">
+      <span style="font-weight:700;color:var(--text)">FBA Wochenplanung</span>
+      <span>FBA: <strong>${fmtDate(d.updatedAt.fbaStock)}</strong></span>
+      <span>Sendungen: <strong>${fmtDate(d.updatedAt.shipments)}</strong></span>
+      <span>Transit: <strong>${fmtDate(d.updatedAt.transit)}</strong></span>
+      <span>Lead Time: <strong>${d.leadTimes.totalDays} Tage</strong> (${d.leadTimes.prodDays}d Produktion + ${d.leadTimes.amazonDays}d Amazon)</span>
+      <button class="btn-ghost btn-sm" onclick="loadFbaPlanung()" style="margin-left:auto">↻ Aktualisieren</button>
+    </div>`;
+
+  const summaryCards = `
+    <div class="kpi-row" style="margin-bottom:20px">
+      <div class="kpi accent-bg"><div class="k-label">FBA Artikel</div><div class="k-val">${d.summary.total}</div><div class="k-sub">importiert</div></div>
+      <div class="kpi ${d.summary.kritisch > 0 ? 'danger' : 'success'}"><div class="k-label">Kritisch</div><div class="k-val">${d.summary.kritisch}</div><div class="k-sub">Pipeline &lt; ${d.leadTimes.totalDays} Tage</div></div>
+      <div class="kpi ${d.summary.warn > 0 ? 'warn' : 'success'}"><div class="k-label">Warnung</div><div class="k-val">${d.summary.warn}</div><div class="k-sub">Pipeline &lt; ${d.leadTimes.totalDays * 2} Tage</div></div>
+      <div class="kpi ${d.summary.zuVersenden > 0 ? 'warn' : ''}"><div class="k-label">Jetzt versenden</div><div class="k-val">${fmt(d.summary.zuVersenden)}</div><div class="k-sub">Stk. aus Transit</div></div>
+      <div class="kpi ${d.summary.zuProduzieren > 0 ? 'danger' : 'success'}"><div class="k-label">Produzieren FBA</div><div class="k-val">${fmt(d.summary.zuProduzieren)}</div><div class="k-sub">Stk. diese Woche</div></div>
+    </div>`;
+
+  if (!d.items.length) {
+    document.getElementById('fbaContent').innerHTML = importBar + summaryCards +
+      '<div class="table-box"><div style="padding:40px;text-align:center;color:var(--muted)">Keine FBA Daten — bitte Sellerboard Lager XLSX in den Einstellungen hochladen.</div></div>';
+    return;
+  }
+
+  const blocks = d.items.map(item => {
+    const pDays = item.pipelineDays < 999 ? item.pipelineDays : null;
+    const pdColor = !pDays ? 'var(--muted)' : pDays < 21 ? 'var(--danger)' : pDays < 42 ? 'var(--warn)' : 'var(--success)';
+    return `
+    <div class="fba-block ${item.status}">
+      <div class="fba-block-header">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:'Libre Baskerville',serif;font-size:0.95rem;font-weight:700;color:var(--accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${item.name.substring(0,65)}</div>
+          <div style="font-size:0.74rem;color:var(--muted);margin-top:2px">${item.skuFba}${item.asin ? ' · ' + item.asin : ''}</div>
+        </div>
+        ${statusBadge(item.status)}
+        <div style="text-align:right;min-width:110px">
+          <div style="font-weight:700;font-size:0.9rem;color:${pdColor}">${pDays ? pDays + ' Tage Pipeline' : 'kein Absatz'}</div>
+          <div style="font-size:0.75rem;color:var(--muted)">${item.velocity > 0 ? item.velocity + ' Stk/Tag' : '—'}</div>
+        </div>
+      </div>
+
+      <div class="fba-lager-grid">
+        <div class="fba-lager-cell">
+          <div class="fba-lager-title">🏭 MAIN Lager (FBM)</div>
+          <div class="fba-lager-val">${fmt(item.mainStock)}</div>
+          <div class="fba-lager-sub">Min: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? ' · <span style="color:var(--warn)">+'+fmt(item.mainOverstock)+' Überschuss</span>' : ''}</div>
+        </div>
+        <div class="fba-lager-cell">
+          <div class="fba-lager-title">📦 Transit Lager</div>
+          <div class="fba-lager-val" style="${item.transitStock === 0 && item.versandEmpfehlung > 0 ? 'color:var(--danger)' : ''}">${fmt(item.transitStock)}</div>
+          <div class="fba-lager-sub">versandbereit für Amazon</div>
+        </div>
+        <div class="fba-lager-cell">
+          <div class="fba-lager-title">✈️ Unterwegs</div>
+          <div class="fba-lager-val">${fmt(item.unitsEnRoute)}</div>
+          <div class="fba-lager-sub">in aktiven Sendungen</div>
+        </div>
+        <div class="fba-lager-cell">
+          <div class="fba-lager-title">🏪 Amazon FBA</div>
+          <div class="fba-lager-val" style="color:${pdColor}">${fmt(item.fbaStock)}</div>
+          <div class="fba-lager-sub">${item.daysLeft > 0 ? item.daysLeft + ' Tage Reichweite' : '—'}</div>
+        </div>
+      </div>
+
+      <div class="fba-actions">
+        <div>
+          <div class="fba-action-label">Versand-Empfehlung</div>
+          <div class="fba-action-val ${item.versandEmpfehlung > 0 ? 'warn' : 'muted'}">${item.versandEmpfehlung > 0 ? fmt(item.versandEmpfehlung) + ' Stk.' : '—'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">lt. Sellerboard</div>
+        </div>
+        <div>
+          <div class="fba-action-label">Jetzt versenden</div>
+          <div class="fba-action-val ${item.versandMoeglich > 0 ? 'success' : 'muted'}">${item.versandMoeglich > 0 ? fmt(item.versandMoeglich) + ' Stk.' : '—'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">aus Transit möglich</div>
+        </div>
+        ${item.ausMainEntnehmen > 0 ? `<div>
+          <div class="fba-action-label">Aus MAIN holen</div>
+          <div class="fba-action-val warn">${fmt(item.ausMainEntnehmen)} Stk.</div>
+          <div style="font-size:0.7rem;color:var(--muted)">→ Transit vorbereiten</div>
+        </div>` : ''}
+        <div>
+          <div class="fba-action-label">Produzieren für FBA</div>
+          <div class="fba-action-val ${item.zuProduzierenFba > 0 ? 'danger' : 'success'}">${item.zuProduzierenFba > 0 ? fmt(item.zuProduzierenFba) + ' Stk.' : '✓ Ausreichend'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">neue Produktion</div>
+        </div>
+        <div>
+          <div class="fba-action-label">Pipeline gesamt</div>
+          <div class="fba-action-val">${fmt(item.pipelineTotal)} Stk.</div>
+          <div style="font-size:0.7rem;color:var(--muted)">FBA + Transit + unterwegs</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('fbaContent').innerHTML = importBar + summaryCards + blocks;
+}
+
+// ─── Aktive Artikel ───────────────────────────────────────────────────────────
+async function loadAktiveArtikel() {
+  document.getElementById('aktivContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Aktive Artikel…</div>';
+  try {
+    const data = await api('/active-articles');
+    renderAktiveArtikel(data);
+    document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
+  } catch (e) {
+    document.getElementById('aktivContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
+  }
+}
+
+function renderAktiveArtikel(d) {
+  const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
+  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : '—';
+
+  const summaryCards = `
+    <div class="kpi-row" style="margin-bottom:20px">
+      <div class="kpi accent-bg"><div class="k-label">Aktive Artikel</div><div class="k-val">${d.total}</div><div class="k-sub">ACTIVE = ja</div></div>
+      <div class="kpi ${d.nullbestand > 0 ? 'danger' : 'success'}"><div class="k-label">Nullbestand</div><div class="k-val">${d.nullbestand}</div><div class="k-sub">überall 0 Stk.</div></div>
+      <div class="kpi ${d.unterMin > 0 ? 'warn' : 'success'}"><div class="k-label">Unter Mindestbestand</div><div class="k-val">${d.unterMin}</div><div class="k-sub">MAIN unter Mindest</div></div>
+    </div>
+    <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <span>Artikel ${fmtDate(d.updatedAt.articles)}</span>
+      <span>MAIN ${fmtDate(d.updatedAt.main)}</span>
+      <span>Transit ${fmtDate(d.updatedAt.transit)}</span>
+      <span>FBA ${fmtDate(d.updatedAt.fba)}</span>
+      <button class="btn-ghost btn-sm" onclick="loadAktiveArtikel()">↻ Aktualisieren</button>
+    </div>`;
+
+  if (!d.items.length) {
+    document.getElementById('aktivContent').innerHTML = summaryCards +
+      '<div class="table-box"><div style="padding:40px;text-align:center;color:var(--muted)">Keine aktiven Artikel — bitte Artikel CSV hochladen (Spalte ACTIVE = ja erforderlich).</div></div>';
+    return;
+  }
+
+  const rows = d.items.map(a => {
+    const rowStyle = a.status === 'nullbestand' ? 'background:rgba(185,64,64,0.06)' : a.unterMin ? 'background:rgba(160,92,71,0.04)' : '';
+    const badge = a.status === 'nullbestand'
+      ? '<span class="badge badge-danger">⚠ Nullbestand</span>'
+      : a.unterMin ? '<span class="badge badge-warn">↓ Unter Min</span>'
+      : '<span class="badge badge-ok">✓ OK</span>';
+    return `<tr style="${rowStyle}">
+      <td>${badge}</td>
+      <td><strong>${a.nr}</strong></td>
+      <td style="font-size:0.8rem;color:var(--muted);max-width:200px">${a.name.substring(0,40)}</td>
+      <td><span class="badge badge-muted" style="font-size:0.7rem">${a.group||'—'}</span></td>
+      <td style="text-align:right;${a.unterMin ? 'color:var(--danger);font-weight:700' : ''}">${fmt(a.mainStock)} <span style="color:var(--muted);font-size:0.72rem">${a.unit}</span></td>
+      <td style="text-align:right">${fmt(a.transitStock)}</td>
+      <td style="text-align:right">${a.fbaStock !== null ? fmt(a.fbaStock) : '<span style="color:var(--muted)">—</span>'}</td>
+      <td style="text-align:right;font-weight:700;color:var(--accent)">${fmt(a.totalStock)}</td>
+      <td style="text-align:right;color:var(--muted)">${a.minQty > 0 ? fmt(a.minQty) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('aktivContent').innerHTML = summaryCards + `
+    <div class="table-box">
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Status</th><th>Artikelnr.</th><th>Name</th><th>Gruppe</th>
+            <th style="text-align:right">MAIN Lager</th>
+            <th style="text-align:right">Transit</th>
+            <th style="text-align:right">Amazon FBA</th>
+            <th style="text-align:right">Total</th>
+            <th style="text-align:right">Mindestbestand</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// ─── OAuth-Redirect auswerten ─────────────────────────────────────────────────
 // OAuth-Redirect auswerten
 const urlParams = new URLSearchParams(window.location.search);
 if (urlParams.get('connected') === 'shopify') {
