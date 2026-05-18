@@ -1677,6 +1677,219 @@ app.get('/api/lagerbestand', async (req, res) => {
   }
 });
 
+// ─── Wochenplanung ────────────────────────────────────────────────────────────
+// Beantwortet 5 Planungsfragen pro Produktfamilie:
+//   1. Was muss zu Amazon gesendet werden?
+//   2. Was für FBA-Transit produzieren?
+//   3. Was für FBM produzieren?
+//   4. Was einkaufen (Rohware)?
+//   5. Reichweiten-Übersicht
+
+app.get('/api/wochenplanung', async (req, res) => {
+  try {
+    const cfg          = loadConfig();
+    const days         = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const weeks        = days / 7;
+    const targetMonths = cfg.targetMonths || 2;
+    const targetWeeks  = targetMonths * 4.33;
+
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
+    const mainData     = loadStock();
+    const mainItems    = mainData.items || {};
+    const transitData  = loadTransitStock();
+    const transitItems = transitData.items || {};
+    const fbaData      = loadFbaStock();
+    const fbaItems     = fbaData.items || {};
+    const shipData     = loadFbaShipments();
+    const inTransit    = shipData.inTransit || {};
+    const partsData    = loadParts();
+    const partsMap     = partsData.mapping || {};
+
+    // Shopify Demand aggregieren (einmalig vor der Familienloop)
+    let lineItems = [];
+    if (cfg.shopifyDomain && cfg.shopifyToken) {
+      try {
+        const shopify = new ShopifyClient(cfg.shopifyDomain, cfg.shopifyToken);
+        lineItems = await shopify.getLineItems(days);
+      } catch { /* graceful degradation: kein Shopify → velocity = 0 */ }
+    }
+
+    // Demand pro Basis-SKU (Shopify-Bundles bereits aufgelöst)
+    const shopifyDemand = {};
+    for (const item of lineItems) {
+      const sku = item.sku;
+      if (!shopifyDemand[sku]) shopifyDemand[sku] = { direct: 0, bundles: {} };
+      if (!item.isBundle) {
+        shopifyDemand[sku].direct += item.qty;
+      } else {
+        const f = item.bundleFactor;
+        if (!shopifyDemand[sku].bundles[f])
+          shopifyDemand[sku].bundles[f] = { baseUnits: 0 };
+        shopifyDemand[sku].bundles[f].baseUnits += item.qty;
+      }
+    }
+
+    const families = [];
+
+    for (const [prefix, rohInfo] of Object.entries(partsMap)) {
+      const sack9Sku  = prefix + '-9';
+      const sack9Art  = artItems[sack9Sku];
+      const sackKg    = sack9Art ? (sack9Art.weightKg || 25) : 25;
+      const pool9Stk  = (mainItems[sack9Sku] || {}).available || 0;
+      const poolKg    = pool9Stk * sackKg;
+
+      // FBM Produktion: alle Größen -1 bis -5 die aktiv sind
+      const sizes = ['1','2','3','4','5'];
+      const fbmProduction = [];
+      for (const sz of sizes) {
+        const sku = prefix + '-' + sz;
+        const art = artItems[sku];
+        if (!art || !art.active) continue;
+
+        const sd         = shopifyDemand[sku] || { direct: 0, bundles: {} };
+        const bundleUnits = Object.values(sd.bundles).reduce((s, b) => s + b.baseUnits, 0);
+        const totalUnits  = sd.direct + bundleUnits;
+        const velocityPW  = weeks > 0 ? totalUnits / weeks : 0;
+        const targetStk   = Math.ceil(velocityPW * targetWeeks);
+        const current     = (mainItems[sku] || {}).available || 0;
+        const rawNeed     = Math.max(0, targetStk - current);
+        const lotSize     = sackKg > 0 && art.weightKg > 0
+          ? Math.ceil(sackKg * 1000 / (art.weightKg * 1000))
+          : 1;
+        const prodNeed    = rawNeed > 0 ? Math.ceil(rawNeed / lotSize) * lotSize : 0;
+        const reichweiteWochen = velocityPW > 0 ? +(current / velocityPW).toFixed(1) : null;
+
+        fbmProduction.push({
+          sku,
+          name:            art.name,
+          active:          art.active,
+          abfuellklasse:   art.abfuellklasse || '',
+          weightKg:        art.weightKg || 0,
+          velocityPW:      +velocityPW.toFixed(2),
+          current,
+          target:          targetStk,
+          rawNeed,
+          lotSize,
+          prodNeed,
+          reichweiteWochen,
+        });
+      }
+
+      const totalFbmKg = fbmProduction.reduce((s, p) => {
+        const art = artItems[p.sku];
+        return s + p.prodNeed * (art ? (art.weightKg || 0) : 0);
+      }, 0);
+
+      // FBA
+      const fbaSku  = prefix + '-5-FBA';
+      const fbaItem = fbaItems[fbaSku];
+      let fbaResult = null;
+      let totalFbaKg = 0;
+
+      if (fbaItem) {
+        const primarySku  = prefix + '-5';
+        const art5        = artItems[primarySku];
+        const transitAvail = (transitItems[primarySku] || {}).available || 0;
+        const mainAvail    = (mainItems[primarySku]    || {}).available || 0;
+        const fbmMinQty    = art5 ? (art5.minQty || 0) : 0;
+        const fbmOverstock = Math.max(0, mainAvail - fbmMinQty);
+        const recommendation = fbaItem.recommendedReorder || 0;
+        const trData       = inTransit[fbaSku] || { shipped: 0, received: 0 };
+        const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
+        const effRec       = Math.max(0, recommendation - enRoute);
+        const shortfall    = Math.max(0, effRec - transitAvail);
+        const fromFbm      = Math.min(shortfall, fbmOverstock);
+        const newProd      = Math.max(0, shortfall - fromFbm);
+        const sendNow      = Math.min(transitAvail, effRec);
+        const stillMissing = Math.max(0, effRec - sendNow);
+
+        totalFbaKg = newProd * (art5 ? (art5.weightKg || 1) : 1);
+
+        fbaResult = {
+          skuFba:         fbaSku,
+          skuBase:        primarySku,
+          fbaStock:       fbaItem.fbaStock || 0,
+          fbaDaysLeft:    fbaItem.daysLeft || 0,
+          fbaVelocity:    fbaItem.velocity || 0,
+          transitAvail,
+          enRoute,
+          recommendation,
+          effRec,
+          sendNow,
+          stillMissing,
+          fromFbm,
+          newProd,
+        };
+      }
+
+      // Einkauf
+      const totalProdKg = totalFbmKg + totalFbaKg;
+      const buyKg       = Math.max(0, totalProdKg - poolKg);
+      const buySacks    = buyKg > 0 ? Math.ceil(buyKg / sackKg) : 0;
+
+      families.push({
+        familyKey:   prefix,
+        rohwareNr:   rohInfo.rohwareNr,
+        rohwareName: rohInfo.rohwareName,
+        sack9Sku,
+        sack9Stock:  pool9Stk,
+        sackKg,
+        poolKg:      +poolKg.toFixed(1),
+        fbmProduction,
+        fba:         fbaResult,
+        einkauf: {
+          totalFbmKg:  +totalFbmKg.toFixed(1),
+          totalFbaKg:  +totalFbaKg.toFixed(1),
+          totalProdKg: +totalProdKg.toFixed(1),
+          poolKg:      +poolKg.toFixed(1),
+          buyKg:       +buyKg.toFixed(1),
+          buySacks,
+        },
+      });
+    }
+
+    // Sortierung: FBA zu senden zuerst, dann Einkaufsbedarf, dann FBM Produktion
+    families.sort((a, b) => {
+      const aFbaSend = a.fba && a.fba.sendNow > 0 ? 1 : 0;
+      const bFbaSend = b.fba && b.fba.sendNow > 0 ? 1 : 0;
+      if (bFbaSend !== aFbaSend) return bFbaSend - aFbaSend;
+      if (b.einkauf.buySacks !== a.einkauf.buySacks) return b.einkauf.buySacks - a.einkauf.buySacks;
+      const aTotalProd = a.fbmProduction.reduce((s, p) => s + p.prodNeed, 0);
+      const bTotalProd = b.fbmProduction.reduce((s, p) => s + p.prodNeed, 0);
+      return bTotalProd - aTotalProd;
+    });
+
+    // Summary
+    const summary = {
+      zuVersenden:       families.reduce((s, f) => s + (f.fba ? f.fba.sendNow : 0), 0),
+      zuProduzierenFba:  families.reduce((s, f) => s + (f.fba ? f.fba.newProd : 0), 0),
+      zuProduzierenFbm:  families.reduce((s, f) => f.fbmProduction.reduce((ss, p) => ss + p.prodNeed, 0) + s, 0),
+      zuEinkaufenKg:     +families.reduce((s, f) => s + f.einkauf.buyKg, 0).toFixed(1),
+      zuEinkaufenSaecke: families.reduce((s, f) => s + f.einkauf.buySacks, 0),
+      familienMitBedarf: families.filter(f =>
+        f.einkauf.buySacks > 0 ||
+        f.fbmProduction.some(p => p.prodNeed > 0) ||
+        (f.fba && (f.fba.sendNow > 0 || f.fba.newProd > 0))
+      ).length,
+    };
+
+    res.json({
+      period:    { days, weeks: +weeks.toFixed(2), targetWeeks: +targetWeeks.toFixed(2) },
+      updatedAt: {
+        articles: artData.updatedAt || null,
+        main:     mainData.updatedAt || null,
+        fba:      fbaData.updatedAt || null,
+      },
+      families,
+      summary,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── Server starten ───────────────────────────────────────────────────────────
 
 const PORT = process.env.PORT || 3000;

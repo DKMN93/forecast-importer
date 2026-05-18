@@ -248,6 +248,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .size-chip.warn { border-color:var(--warn); color:var(--warn); }
 .lager-filter-bar { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center; }
 
+/* ── Wochenplanung ── */
+.wp-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:20px; overflow:hidden; }
+.wp-section-header { padding:12px 20px; background:var(--accent); color:#fff; display:flex; align-items:center; gap:10px; }
+.wp-section-header h3 { font-size:0.85rem; font-weight:700; letter-spacing:0.04em; margin:0; color:#fff; }
+.wp-section-header .wp-badge { background:rgba(255,255,255,0.2); color:#fff; font-size:0.75rem; font-weight:700; padding:2px 10px; border-radius:20px; }
+.wp-empty { padding:24px; text-align:center; color:var(--muted); font-size:0.85rem; }
+
 /* ── FBA Planung ── */
 .fba-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; border-left: 4px solid var(--border); }
 .fba-block.kritisch { border-left-color: var(--danger); }
@@ -281,6 +288,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
   <div class="nav">
     <div class="nav-item active" onclick="showView('dashboard')">
       <span class="icon">📊</span> Dashboard
+    </div>
+    <div class="nav-item" onclick="showView('wochen')">
+      <span class="icon">📋</span> Wochenplanung
     </div>
     <div class="nav-item" onclick="showView('planung')">
       <span class="icon">📦</span> Planung
@@ -439,6 +449,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       </div>
     </div>
 
+    <!-- ─── WOCHENPLANUNG VIEW ─── -->
+    <div class="view" id="view-wochen">
+      <div id="wochenContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade Wochenplanung…</div>
+      </div>
+    </div>
+
     <!-- ─── AKTIVE ARTIKEL VIEW ─── -->
     <div class="view" id="view-aktiv">
       <div id="aktivContent">
@@ -508,10 +525,10 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen hochladen (stock_lots CSV — MAIN Lager)</div>
               <input type="file" accept=".csv" style="display:none" onchange="uploadStock(this)">
             </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen hochladen (stock_lots CSV — Transitlager)</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadStockTransit(this)">
-            </label>
+            <!-- Transit-Daten werden automatisch aus dem MAIN-Lager-Upload extrahiert (Standort = "Amazon FBA") -->
+            <div style="padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.82rem;color:var(--muted);background:var(--surface2)">
+              Transit-Daten werden automatisch aus dem Chargen-Upload (oben) extrahiert — Zeilen mit Standort "Amazon FBA" fließen ins Transitlager.
+            </div>
             <label>
               <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Lager XLSX — FBA Bestand</div>
               <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardLager(this)">
@@ -546,6 +563,7 @@ function onPeriodChange(val) {
   selectedDays = parseInt(val);
   dashData = null; artikelData = null;
   if (currentView === 'dashboard') loadDashboard();
+  else if (currentView === 'wochen')   loadWochenplanung();
   else if (currentView === 'planung')  loadPlanung();
   else if (currentView === 'artikel')  loadArtikel();
 }
@@ -572,6 +590,7 @@ async function api(path, opts = {}) {
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 const viewTitles = {
   setup: 'Einrichtung', dashboard: 'Dashboard',
+  wochen: 'Wochenplanung',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
   lager: 'Lagerübersicht', fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
   log: 'Update-Protokoll', settings: 'Einstellungen'
@@ -589,6 +608,7 @@ function showView(name) {
   currentView = name;
 
   if (name === 'dashboard' && !dashData) loadDashboard();
+  if (name === 'wochen')     loadWochenplanung();
   if (name === 'planung')    loadPlanung();
   if (name === 'artikel')    loadArtikel();
   if (name === 'lager')      loadLagerbestand();
@@ -1615,6 +1635,308 @@ function renderLagerbestand(d) {
 
 function setLagerFilter(f) { _lagerFilter = f; loadLagerbestand(); }
 function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce via timeout */ clearTimeout(window._lagerSearchT); window._lagerSearchT = setTimeout(() => loadLagerbestand(), 300); } }
+
+// ─── Wochenplanung ────────────────────────────────────────────────────────────
+async function loadWochenplanung() {
+  document.getElementById('wochenContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Wochenplanung…</div>';
+  try {
+    const data = await api('/wochenplanung?days=' + getPeriodDays());
+    renderWochenplanung(data);
+    document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
+  } catch (e) {
+    document.getElementById('wochenContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
+  }
+}
+
+function renderWochenplanung(d) {
+  const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
+  const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : '—';
+
+  // Meta-Info Zeile
+  const metaBar = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:0.78rem;color:var(--muted);margin-bottom:16px;align-items:center;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px">
+      <span>Zeitraum: <strong style="color:var(--text)">${d.period.days} Tage / ${d.period.weeks.toFixed(1)} Wochen</strong></span>
+      <span>Ziel: <strong style="color:var(--text)">${d.period.targetWeeks.toFixed(1)} Wochen</strong></span>
+      <span>Artikel: <strong>${fmtDate(d.updatedAt.articles)}</strong></span>
+      <span>Lager: <strong>${fmtDate(d.updatedAt.main)}</strong></span>
+      <span>FBA: <strong>${fmtDate(d.updatedAt.fba)}</strong></span>
+      <button class="btn-ghost btn-sm" onclick="loadWochenplanung()" style="margin-left:auto">↻ Aktualisieren</button>
+    </div>`;
+
+  // Summary KPI-Zeile
+  const s = d.summary;
+  const summaryCards = `
+    <div class="kpi-row" style="margin-bottom:20px">
+      <div class="kpi ${s.zuVersenden > 0 ? 'warn' : ''}">
+        <div class="k-label">Zu versenden</div>
+        <div class="k-val">${fmt(s.zuVersenden)}</div>
+        <div class="k-sub">Stk. an Amazon</div>
+      </div>
+      <div class="kpi ${s.zuProduzierenFba > 0 ? 'danger' : 'success'}">
+        <div class="k-label">Produzieren FBA</div>
+        <div class="k-val">${fmt(s.zuProduzierenFba)}</div>
+        <div class="k-sub">Stk. für Transit</div>
+      </div>
+      <div class="kpi ${s.zuProduzierenFbm > 0 ? 'warn' : 'success'}">
+        <div class="k-label">Produzieren FBM</div>
+        <div class="k-val">${fmt(s.zuProduzierenFbm)}</div>
+        <div class="k-sub">Stk. für MAIN Lager</div>
+      </div>
+      <div class="kpi ${s.zuEinkaufenSaecke > 0 ? 'danger' : 'success'}">
+        <div class="k-label">Einkaufen</div>
+        <div class="k-val">${fmt(s.zuEinkaufenSaecke)}</div>
+        <div class="k-sub">${fmt(s.zuEinkaufenKg)} KG Rohware</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">Familien mit Bedarf</div>
+        <div class="k-val">${s.familienMitBedarf}</div>
+        <div class="k-sub">von ${d.families.length} Familien</div>
+      </div>
+    </div>`;
+
+  // ── Sektion 1: Versenden an Amazon ────────────────────────────────────────
+  const fbaVersenden = d.families.filter(f => f.fba && f.fba.recommendation > 0);
+  let section1 = '';
+  if (fbaVersenden.length) {
+    const rows = fbaVersenden.map(f => {
+      const fba = f.fba;
+      const sendColor    = fba.sendNow > 0 ? 'color:var(--success);font-weight:700' : 'color:var(--muted)';
+      const missingColor = fba.stillMissing > 0 ? 'color:var(--warn);font-weight:700' : 'color:var(--muted)';
+      const newProdColor = fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
+      const daysColor    = fba.fbaDaysLeft < 21 ? 'color:var(--danger)' : fba.fbaDaysLeft < 42 ? 'color:var(--warn)' : 'color:var(--success)';
+      return `<tr>
+        <td><strong>${f.familyKey}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td style="text-align:right">${fmt(fba.fbaStock)}</td>
+        <td style="text-align:right;${daysColor}">${fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : '—'}</td>
+        <td style="text-align:right">${fmt(fba.transitAvail)}</td>
+        <td style="text-align:right;${sendColor}">${fba.sendNow > 0 ? fmt(fba.sendNow) + ' Stk.' : '—'}</td>
+        <td style="text-align:right;${missingColor}">${fba.stillMissing > 0 ? fmt(fba.stillMissing) + ' Stk.' : '—'}</td>
+        <td style="text-align:right;${newProdColor}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : (fba.enRoute > 0 ? '(' + fmt(fba.enRoute) + ' unterwegs)' : '—')}</td>
+      </tr>`;
+    }).join('');
+    section1 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">✈️</span>
+        <h3>1. Versenden an Amazon (Transit → FBA)</h3>
+        <span class="wp-badge">${fbaVersenden.length} Familie${fbaVersenden.length !== 1 ? 'n' : ''}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Produkt</th>
+          <th style="text-align:right">FBA Bestand</th>
+          <th style="text-align:right">Reichweite</th>
+          <th style="text-align:right">Transit bereit</th>
+          <th style="text-align:right">Jetzt senden</th>
+          <th style="text-align:right">Fehlmenge</th>
+          <th style="text-align:right">Noch produzieren / in Transit</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  // ── Sektion 2: Produzieren für FBA Transit ─────────────────────────────────
+  const fbaProd = d.families.filter(f => f.fba && (f.fba.newProd > 0 || f.fba.fromFbm > 0));
+  let section2 = '';
+  if (fbaProd.length) {
+    const art5Items = {};
+    d.families.forEach(f => {
+      if (f.fba) {
+        const art = { abfuellklasse: '' };
+        // abfuellklasse aus fbmProduction -5 holen falls vorhanden
+        const p5 = f.fbmProduction.find(p => p.sku === f.fba.skuBase);
+        if (p5) art.abfuellklasse = p5.abfuellklasse;
+        art5Items[f.familyKey] = art;
+      }
+    });
+    const rows = fbaProd.map(f => {
+      const fba  = f.fba;
+      const p5   = f.fbmProduction.find(p => p.sku === fba.skuBase);
+      const kl   = p5 ? p5.abfuellklasse : '—';
+      const lotSz = p5 ? p5.lotSize : '—';
+      return `<tr>
+        <td><strong>${f.familyKey}-5</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.effRec)} Stk.</td>
+        <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}</td>
+        <td style="text-align:right;${fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)'}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : '—'}</td>
+        <td style="text-align:right">${lotSz}</td>
+        <td style="text-align:center"><span class="badge badge-muted">${kl || '—'}</span></td>
+      </tr>`;
+    }).join('');
+    section2 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🏭</span>
+        <h3>2. Produzieren für FBA Transit</h3>
+        <span class="wp-badge">${fbaProd.length} Produkt${fbaProd.length !== 1 ? 'e' : ''}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Produkt</th>
+          <th style="text-align:right">Fehlmenge</th>
+          <th style="text-align:right">Aus FBM holen</th>
+          <th style="text-align:right">Neu produzieren</th>
+          <th style="text-align:right">Los-Größe</th>
+          <th style="text-align:center">Abfüllklasse</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  // ── Sektion 3: Produzieren für FBM (gruppiert nach Abfüllklasse) ───────────
+  const fbmLines = [];
+  d.families.forEach(f => {
+    f.fbmProduction.forEach(p => {
+      if (p.prodNeed > 0) fbmLines.push({ ...p, familyKey: f.familyKey });
+    });
+  });
+
+  let section3 = '';
+  if (fbmLines.length) {
+    // Gruppiere nach Abfüllklasse
+    const byKlasse = {};
+    fbmLines.forEach(p => {
+      const kl = p.abfuellklasse || '(keine)';
+      if (!byKlasse[kl]) byKlasse[kl] = [];
+      byKlasse[kl].push(p);
+    });
+
+    let tableRows = '';
+    for (const [kl, items] of Object.entries(byKlasse).sort(([a],[b]) => a.localeCompare(b))) {
+      tableRows += `<tr style="background:var(--surface2)">
+        <td colspan="8" style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);padding:8px 16px">Abfüllklasse ${kl}</td>
+      </tr>`;
+      items.forEach(p => {
+        const rwColor = p.reichweiteWochen === null ? 'color:var(--muted)'
+          : p.reichweiteWochen < d.period.targetWeeks * 0.5 ? 'color:var(--danger);font-weight:700'
+          : p.reichweiteWochen < d.period.targetWeeks ? 'color:var(--warn);font-weight:700'
+          : 'color:var(--success)';
+        tableRows += `<tr>
+          <td><strong>${p.sku}</strong></td>
+          <td style="text-align:center"><span class="badge badge-muted">${p.abfuellklasse || '—'}</span></td>
+          <td style="text-align:right">${fmt(p.current)}</td>
+          <td style="text-align:right">${p.velocityPW > 0 ? p.velocityPW.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
+          <td style="text-align:right">${fmt(p.target)}</td>
+          <td style="text-align:right;color:var(--danger);font-weight:700">${fmt(p.prodNeed)}</td>
+          <td style="text-align:right">${fmt(p.lotSize)}</td>
+          <td style="text-align:right;${rwColor}">${p.reichweiteWochen !== null ? p.reichweiteWochen.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
+        </tr>`;
+      });
+    }
+
+    section3 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">📦</span>
+        <h3>3. Produzieren für FBM (MAIN Lager)</h3>
+        <span class="wp-badge">${fbmLines.length} SKU${fbmLines.length !== 1 ? 's' : ''}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>SKU</th><th style="text-align:center">Klasse</th>
+          <th style="text-align:right">Bestand</th>
+          <th style="text-align:right">Ø /Woche</th>
+          <th style="text-align:right">Zielbestand</th>
+          <th style="text-align:right">Produzieren</th>
+          <th style="text-align:right">Los-Größe</th>
+          <th style="text-align:right">Reichweite</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table></div>
+    </div>`;
+  } else {
+    section3 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">📦</span>
+        <h3>3. Produzieren für FBM (MAIN Lager)</h3>
+        <span class="wp-badge">0 SKUs</span>
+      </div>
+      <div class="wp-empty">Kein FBM-Produktionsbedarf im aktuellen Zeitraum.</div>
+    </div>`;
+  }
+
+  // ── Sektion 4: Einkaufen ───────────────────────────────────────────────────
+  const einkaufFam = d.families.filter(f => f.einkauf.buySacks > 0);
+  let section4 = '';
+  if (einkaufFam.length) {
+    const rows = einkaufFam.map(f => {
+      const e = f.einkauf;
+      return `<tr>
+        <td><strong>${f.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td>${f.familyKey}</td>
+        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke / ${fmt(f.poolKg)} KG</td>
+        <td style="text-align:right">${e.totalProdKg.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} KG</td>
+        <td style="text-align:right;color:var(--danger);font-weight:700">${e.buyKg.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} KG</td>
+        <td style="text-align:right;color:var(--danger);font-weight:700">${fmt(e.buySacks)} Säcke</td>
+      </tr>`;
+    }).join('');
+    section4 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🛒</span>
+        <h3>4. Einkaufen (Rohware)</h3>
+        <span class="wp-badge">${einkaufFam.length} Rohware${einkaufFam.length !== 1 ? 'n' : ''}</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Rohware (AXY)</th><th>Produkt-Familie</th>
+          <th style="text-align:right">-9 Pool</th>
+          <th style="text-align:right">Produktionsbedarf</th>
+          <th style="text-align:right">Kaufen KG</th>
+          <th style="text-align:right">Kaufen Säcke</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  // ── Sektion 5: Reichweiten Übersicht ───────────────────────────────────────
+  const overviewRows = d.families.map(f => {
+    const fba = f.fba;
+    const p5  = f.fbmProduction.find(p => p.sku === f.familyKey + '-5');
+    const mainRw = p5 && p5.reichweiteWochen !== null ? p5.reichweiteWochen : null;
+    const mainColor = mainRw === null ? 'color:var(--muted)'
+      : mainRw < d.period.targetWeeks * 0.5 ? 'color:var(--danger);font-weight:700'
+      : mainRw < d.period.targetWeeks ? 'color:var(--warn);font-weight:700'
+      : 'color:var(--success)';
+    const fbaColor = !fba ? '' : fba.fbaDaysLeft < 21 ? 'color:var(--danger);font-weight:700'
+      : fba.fbaDaysLeft < 42 ? 'color:var(--warn);font-weight:700'
+      : 'color:var(--success)';
+    const pool9Color = f.sack9Stock <= 1 ? 'color:var(--warn);font-weight:700' : '';
+    return `<tr>
+      <td><strong>${f.familyKey}</strong></td>
+      <td style="text-align:right;${pool9Color}">${fmt(f.sack9Stock)} Säcke / ${fmt(f.poolKg)} KG</td>
+      <td style="text-align:right;${mainColor}">${mainRw !== null ? mainRw.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
+      <td style="text-align:right">${fba ? fmt(fba.transitAvail) + ' Stk.' : '—'}</td>
+      <td style="text-align:right;${fbaColor}">${fba && fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : fba ? fmt(fba.fbaStock) + ' Stk.' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  const section5 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">📊</span>
+        <h3>5. Reichweiten Übersicht</h3>
+        <span class="wp-badge">${d.families.length} Familien</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>Familie</th>
+          <th style="text-align:right">-9 Pool (Säcke/KG)</th>
+          <th style="text-align:right">MAIN FBM (Wo.)</th>
+          <th style="text-align:right">Transit</th>
+          <th style="text-align:right">Amazon FBA (Tage)</th>
+        </tr></thead>
+        <tbody>${overviewRows || '<tr><td colspan="5" class="wp-empty">Keine Familien — bitte Stücklisten-Mapping hochladen.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+
+  document.getElementById('wochenContent').innerHTML =
+    metaBar + summaryCards + section1 + section2 + section3 + section4 + section5;
+}
 
 // ─── Transit & Sellerboard Uploads ───────────────────────────────────────────
 async function uploadStockTransit(input) {
