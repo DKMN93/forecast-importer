@@ -337,6 +337,7 @@ const STOCK_FILE         = path.join(DATA_DIR, 'stock.json');
 const TRANSIT_STOCK_FILE = path.join(DATA_DIR, 'stock-transit.json');
 const FBA_STOCK_FILE     = path.join(DATA_DIR, 'fba-stock.json');
 const FBA_SHIPMENTS_FILE = path.join(DATA_DIR, 'fba-shipments.json');
+const PO_FILE            = path.join(DATA_DIR, 'purchase-orders.json');
 
 function loadStock() {
   try { return JSON.parse(fs.readFileSync(STOCK_FILE, 'utf8')); }
@@ -353,6 +354,10 @@ function loadFbaStock() {
 function loadFbaShipments() {
   try { return JSON.parse(fs.readFileSync(FBA_SHIPMENTS_FILE, 'utf8')); }
   catch { return { shipments: [], inTransit: {} }; }
+}
+function loadPurchaseOrders() {
+  try { return JSON.parse(fs.readFileSync(PO_FILE, 'utf8')); }
+  catch { return { incoming: {} }; }
 }
 
 app.post('/api/upload-stock', upload.single('file'), (req, res) => {
@@ -1345,6 +1350,72 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
   }
 });
 
+// ─── Bestellungen (Purchase Orders) Upload ───────────────────────────────────
+// Importiert offene Einkaufsbestellungen aus MRPeasy CSV.
+// Relevante Zeilen: Status (erste Spalte) = "Verschickt" → im Zulauf.
+// Menge = kg (ERP speichert Rohware in kg).
+
+app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
+    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: 'Leere Datei' });
+
+    const parseRow = l => l.split(';').map(v => v.replace(/^"|"$/g, '').trim());
+    const headers = parseRow(lines[0]);
+    const idx = name => headers.indexOf(name);
+
+    const iNr       = idx('Nummer');
+    const iSku      = idx('Artikelnr.');
+    const iName     = idx('Artikelbezeichnung');
+    const iMenge    = idx('Menge');
+    const iLiefdat  = idx('Erw. Lieferdatum');
+    const iLieferant = idx('Lieferant');
+    // Zwei "Status"-Spalten — erste ist der Zeilenstatus
+    let iStatus = -1;
+    for (let i = 0; i < headers.length; i++) {
+      if (headers[i] === 'Status') { iStatus = i; break; }
+    }
+
+    if (iSku === -1 || iMenge === -1) return res.status(400).json({ error: 'Unbekanntes Format' });
+
+    const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
+    const incoming = {}; // axyNr → { sku, name, totalKg, lieferant, lines[] }
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols   = parseRow(lines[i]);
+      const status = iStatus >= 0 ? cols[iStatus] : '';
+      // Nur "Verschickt" = unterwegs, noch nicht angekommen
+      if (status !== 'Verschickt') continue;
+
+      const sku   = cols[iSku];
+      const menge = pf(cols[iMenge]); // kg
+      if (!sku || menge <= 0) continue;
+
+      if (!incoming[sku]) incoming[sku] = {
+        sku, name: cols[iName] || '',
+        lieferant: iLieferant >= 0 ? cols[iLieferant] : '',
+        totalKg: 0, orders: [],
+      };
+      incoming[sku].totalKg += menge;
+      incoming[sku].orders.push({
+        poNr:    cols[iNr]      || '',
+        menge,
+        liefdat: iLiefdat >= 0 ? cols[iLiefdat] : '',
+      });
+    }
+
+    fs.writeFileSync(PO_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), incoming }, null, 2));
+    res.json({ ok: true, inTransitCount: Object.keys(incoming).length });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/purchase-orders', (req, res) => res.json(loadPurchaseOrders()));
+
 // ─── FBA Wochenplanung ────────────────────────────────────────────────────────
 // Lead times: 7 Tage Produktion + 14 Tage Amazon Einlagerung = 21 Tage gesamt
 
@@ -1705,6 +1776,8 @@ app.get('/api/wochenplanung', async (req, res) => {
     const inTransit    = shipData.inTransit || {};
     const partsData    = loadParts();
     const partsMap     = partsData.mapping || {};
+    const poData       = loadPurchaseOrders();
+    const poIncoming   = poData.incoming || {};
 
     // Shopify Demand aggregieren (einmalig vor der Familienloop)
     let lineItems = [];
@@ -1824,10 +1897,14 @@ app.get('/api/wochenplanung', async (req, res) => {
         };
       }
 
-      // Einkauf
-      const totalProdKg = totalFbmKg + totalFbaKg;
-      const buyKg       = Math.max(0, totalProdKg - poolKg);
-      const buySacks    = buyKg > 0 ? Math.ceil(buyKg / sackKg) : 0;
+      // Einkauf — offene Bestellungen (Verschickt) abziehen
+      const totalProdKg  = totalFbmKg + totalFbaKg;
+      const poEntry      = poIncoming[rohInfo.rohwareNr] || null;
+      const incomingKg   = poEntry ? poEntry.totalKg : 0;
+      const buyKg        = Math.max(0, totalProdKg - poolKg);
+      const stillToBuyKg = Math.max(0, buyKg - incomingKg);
+      const buySacks     = buyKg       > 0 ? Math.ceil(buyKg       / sackKg) : 0;
+      const stillBuySacks = stillToBuyKg > 0 ? Math.ceil(stillToBuyKg / sackKg) : 0;
 
       families.push({
         familyKey:   prefix,
@@ -1840,12 +1917,16 @@ app.get('/api/wochenplanung', async (req, res) => {
         fbmProduction,
         fba:         fbaResult,
         einkauf: {
-          totalFbmKg:  +totalFbmKg.toFixed(1),
-          totalFbaKg:  +totalFbaKg.toFixed(1),
-          totalProdKg: +totalProdKg.toFixed(1),
-          poolKg:      +poolKg.toFixed(1),
-          buyKg:       +buyKg.toFixed(1),
+          totalFbmKg:   +totalFbmKg.toFixed(1),
+          totalFbaKg:   +totalFbaKg.toFixed(1),
+          totalProdKg:  +totalProdKg.toFixed(1),
+          poolKg:       +poolKg.toFixed(1),
+          buyKg:        +buyKg.toFixed(1),
           buySacks,
+          incomingKg:   +incomingKg.toFixed(1),
+          incomingOrders: poEntry ? poEntry.orders : [],
+          stillToBuyKg: +stillToBuyKg.toFixed(1),
+          stillBuySacks,
         },
       });
     }
@@ -1868,6 +1949,9 @@ app.get('/api/wochenplanung', async (req, res) => {
       zuProduzierenFbm:  families.reduce((s, f) => f.fbmProduction.reduce((ss, p) => ss + p.prodNeed, 0) + s, 0),
       zuEinkaufenKg:     +families.reduce((s, f) => s + f.einkauf.buyKg, 0).toFixed(1),
       zuEinkaufenSaecke: families.reduce((s, f) => s + f.einkauf.buySacks, 0),
+      imZulaufKg:        +families.reduce((s, f) => s + f.einkauf.incomingKg, 0).toFixed(1),
+      nochKaufenKg:      +families.reduce((s, f) => s + f.einkauf.stillToBuyKg, 0).toFixed(1),
+      nochKaufenSaecke:  families.reduce((s, f) => s + f.einkauf.stillBuySacks, 0),
       familienMitBedarf: families.filter(f =>
         f.einkauf.buySacks > 0 ||
         f.fbmProduction.some(p => p.prodNeed > 0) ||

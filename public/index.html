@@ -537,6 +537,10 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Sendungen XLSX — FBA Shipments</div>
               <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardShipments(this)">
             </label>
+            <label>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Bestellungen hochladen (purchase_orders CSV aus MRPeasy)</div>
+              <input type="file" accept=".csv" style="display:none" onchange="uploadPurchaseOrders(this)">
+            </label>
           </div>
         </div>
       </div>
@@ -1682,10 +1686,10 @@ function renderWochenplanung(d) {
         <div class="k-val">${fmt(s.zuProduzierenFbm)}</div>
         <div class="k-sub">Stk. für MAIN Lager</div>
       </div>
-      <div class="kpi ${s.zuEinkaufenSaecke > 0 ? 'danger' : 'success'}">
-        <div class="k-label">Einkaufen</div>
-        <div class="k-val">${fmt(s.zuEinkaufenSaecke)}</div>
-        <div class="k-sub">${fmt(s.zuEinkaufenKg)} KG Rohware</div>
+      <div class="kpi ${s.nochKaufenSaecke > 0 ? 'danger' : s.zuEinkaufenSaecke > 0 ? 'warn' : 'success'}">
+        <div class="k-label">Noch zu kaufen</div>
+        <div class="k-val">${fmt(s.nochKaufenSaecke ?? s.zuEinkaufenSaecke)}</div>
+        <div class="k-sub">${s.imZulaufKg > 0 ? fmt(s.imZulaufKg) + ' KG im Zulauf' : fmt(s.zuEinkaufenKg) + ' KG Bedarf'}</div>
       </div>
       <div class="kpi">
         <div class="k-label">Familien mit Bedarf</div>
@@ -1863,18 +1867,29 @@ function renderWochenplanung(d) {
   }
 
   // ── Sektion 4: Einkaufen ───────────────────────────────────────────────────
-  const einkaufFam = d.families.filter(f => f.einkauf.buySacks > 0);
+  // Zeige alle Familien mit Einkaufsbedarf ODER mit offenen Bestellungen
+  const einkaufFam = d.families.filter(f => f.einkauf.buySacks > 0 || f.einkauf.incomingKg > 0);
   let section4 = '';
   if (einkaufFam.length) {
+    const fmtKg = v => v != null ? v.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—';
     const rows = einkaufFam.map(f => {
       const e = f.einkauf;
+      const poInfo = e.incomingOrders && e.incomingOrders.length
+        ? e.incomingOrders.map(o => `${o.poNr}: ${o.menge} kg${o.liefdat ? ' (erw. ' + o.liefdat + ')' : ''}`).join('<br>')
+        : '';
+      const stillColor = e.stillBuySacks > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--success)';
       return `<tr>
         <td><strong>${f.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td>${f.familyKey}</td>
-        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke / ${fmt(f.poolKg)} KG</td>
-        <td style="text-align:right">${e.totalProdKg.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} KG</td>
-        <td style="text-align:right;color:var(--danger);font-weight:700">${e.buyKg.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} KG</td>
-        <td style="text-align:right;color:var(--danger);font-weight:700">${fmt(e.buySacks)} Säcke</td>
+        <td style="font-size:0.82rem">${f.familyKey}</td>
+        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke<br><span style="color:var(--muted);font-size:0.75rem">${fmtKg(f.poolKg)} KG</span></td>
+        <td style="text-align:right">${fmtKg(e.totalProdKg)} KG</td>
+        <td style="text-align:right">${fmtKg(e.buyKg)} KG<br><span style="color:var(--muted);font-size:0.75rem">${fmt(e.buySacks)} Säcke</span></td>
+        <td style="text-align:right">${e.incomingKg > 0
+          ? `<span style="color:var(--success);font-weight:700">${fmtKg(e.incomingKg)} KG</span><div style="font-size:0.7rem;color:var(--muted)">${poInfo}</div>`
+          : '<span style="color:var(--muted)">—</span>'}</td>
+        <td style="text-align:right;${stillColor}">${e.stillBuySacks > 0
+          ? `${fmtKg(e.stillToBuyKg)} KG<br>${fmt(e.stillBuySacks)} Säcke`
+          : '<span style="font-weight:400">✓ Gedeckt</span>'}</td>
       </tr>`;
     }).join('');
     section4 = `
@@ -1886,11 +1901,12 @@ function renderWochenplanung(d) {
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
-          <th>Rohware (AXY)</th><th>Produkt-Familie</th>
+          <th>Rohware (AXY)</th><th>Familie</th>
           <th style="text-align:right">-9 Pool</th>
           <th style="text-align:right">Produktionsbedarf</th>
-          <th style="text-align:right">Kaufen KG</th>
-          <th style="text-align:right">Kaufen Säcke</th>
+          <th style="text-align:right">Brutto-Bedarf</th>
+          <th style="text-align:right">Im Zulauf (Verschickt)</th>
+          <th style="text-align:right">Noch kaufen</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
@@ -1969,6 +1985,21 @@ async function uploadSellerboardLager(input) {
     const data = await res.json();
     if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
     toast(`✓ FBA Lager: ${data.skuCount} SKUs importiert`);
+    input.value = '';
+  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
+}
+
+async function uploadPurchaseOrders(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Bestellungen werden importiert…');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload-purchase-orders', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
+    toast(`✓ ${data.inTransitCount} Rohwaren im Zulauf importiert`);
     input.value = '';
   } catch (e) { toast('Fehler: ' + e.message, 'err'); }
 }
