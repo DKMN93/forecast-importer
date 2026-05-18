@@ -219,6 +219,35 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
   .form-grid { grid-template-columns: 1fr; }
 }
 
+/* ── Lagerübersicht ── */
+.lager-family { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:14px; overflow:hidden; border-left:4px solid var(--border); }
+.lager-family.kritisch { border-left-color:var(--danger); }
+.lager-family.warn     { border-left-color:var(--warn); }
+.lager-family.ok       { border-left-color:var(--success); }
+.lager-family-header { padding:12px 18px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--surface2); border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
+.lager-family-title { font-family:'Libre Baskerville',serif; font-size:0.9rem; font-weight:700; color:var(--accent); flex:1; }
+.lager-warehouses { display:grid; grid-template-columns:repeat(4,1fr); border-bottom:1px solid var(--border); }
+.lager-wh { padding:12px 16px; border-right:1px solid var(--border); }
+.lager-wh:last-child { border-right:none; }
+.lager-wh-label { font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); margin-bottom:4px; }
+.lager-wh-val { font-size:1.4rem; font-weight:700; color:var(--text); line-height:1.1; }
+.lager-wh-sub { font-size:0.7rem; color:var(--muted); margin-top:3px; }
+.demand-matrix { border-bottom:1px solid var(--border); }
+.demand-matrix-title { padding:7px 18px; font-size:0.65rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); background:var(--surface2); border-bottom:1px solid var(--border); }
+.demand-row { display:flex; align-items:center; padding:6px 18px; border-bottom:1px solid var(--border); font-size:0.81rem; }
+.demand-row:last-child { border-bottom:none; }
+.demand-row.subtotal { background:rgba(0,68,54,0.04); }
+.demand-row.grand-total { background:var(--accent); color:#fff; font-weight:700; }
+.demand-row.fba-row { background:rgba(149,190,172,0.12); }
+.demand-source { flex:1; }
+.demand-val { width:90px; text-align:right; font-weight:600; font-variant-numeric:tabular-nums; }
+.demand-share { width:55px; text-align:right; font-size:0.75rem; }
+.lager-other-sizes { padding:8px 18px; display:flex; gap:8px; flex-wrap:wrap; border-bottom:1px solid var(--border); background:var(--surface); }
+.size-chip { font-size:0.72rem; padding:3px 8px; border-radius:10px; background:var(--surface2); border:1px solid var(--border); color:var(--text); }
+.size-chip.ok { border-color:var(--success); color:var(--success); }
+.size-chip.warn { border-color:var(--warn); color:var(--warn); }
+.lager-filter-bar { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center; }
+
 /* ── FBA Planung ── */
 .fba-block { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; overflow: hidden; border-left: 4px solid var(--border); }
 .fba-block.kritisch { border-left-color: var(--danger); }
@@ -260,6 +289,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       <span class="icon">🔍</span> Artikel
     </div>
 
+    <div class="nav-item" onclick="showView('lager')">
+      <span class="icon">🏭</span> Lagerübersicht
+    </div>
     <div class="nav-item" onclick="showView('fba')">
       <span class="icon">🚀</span> FBA Planung
     </div>
@@ -390,6 +422,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div class="view" id="view-artikel">
       <div id="artikelContent">
         <div class="loading-overlay"><div class="spinner"></div>Lade Artikeldaten…</div>
+      </div>
+    </div>
+
+    <!-- ─── LAGERÜBERSICHT VIEW ─── -->
+    <div class="view" id="view-lager">
+      <div id="lagerContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade Lagerübersicht…</div>
       </div>
     </div>
 
@@ -534,7 +573,7 @@ async function api(path, opts = {}) {
 const viewTitles = {
   setup: 'Einrichtung', dashboard: 'Dashboard',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
-  fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
+  lager: 'Lagerübersicht', fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
   log: 'Update-Protokoll', settings: 'Einstellungen'
 };
 
@@ -552,6 +591,7 @@ function showView(name) {
   if (name === 'dashboard' && !dashData) loadDashboard();
   if (name === 'planung')    loadPlanung();
   if (name === 'artikel')    loadArtikel();
+  if (name === 'lager')      loadLagerbestand();
   if (name === 'fba')        loadFbaPlanung();
   if (name === 'aktiv')      loadAktiveArtikel();
   if (name === 'log')        loadLog();
@@ -1394,6 +1434,187 @@ async function saveSettings() {
     toast('Fehler: ' + e.message, 'err');
   }
 }
+
+// ─── Lagerübersicht ──────────────────────────────────────────────────────────
+let _lagerFilter = 'alle'; // 'alle' | 'active' | 'kritisch'
+let _lagerSearch = '';
+
+async function loadLagerbestand() {
+  document.getElementById('lagerContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Lagerübersicht…</div>';
+  try {
+    const data = await api('/lagerbestand?days=' + getPeriodDays());
+    renderLagerbestand(data);
+    document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
+  } catch (e) {
+    document.getElementById('lagerContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
+  }
+}
+
+function renderLagerbestand(d) {
+  const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
+  const fmtF    = (v, dec=1) => v != null ? Number(v).toLocaleString('de', {minimumFractionDigits:dec,maximumFractionDigits:dec}) : '—';
+  const stBadge = s => s === 'kritisch' ? '<span class="badge badge-danger">KRITISCH</span>'
+                     : s === 'warn'     ? '<span class="badge badge-warn">WARNUNG</span>'
+                     : '<span class="badge badge-ok">OK</span>';
+
+  const summary = `
+    <div class="kpi-row" style="margin-bottom:18px">
+      <div class="kpi accent-bg"><div class="k-label">Produktfamilien</div><div class="k-val">${d.summary.total}</div><div class="k-sub">${d.summary.active} aktiv</div></div>
+      <div class="kpi ${d.summary.kritisch > 0 ? 'danger':'success'}"><div class="k-label">Kritisch</div><div class="k-val">${d.summary.kritisch}</div><div class="k-sub">sofort handeln</div></div>
+      <div class="kpi ${d.summary.warn > 0 ? 'warn':'success'}"><div class="k-label">Warnung</div><div class="k-val">${d.summary.warn}</div><div class="k-sub">bald handeln</div></div>
+      <div class="kpi"><div class="k-label">Zeitraum</div><div class="k-val">${d.period.days}d</div><div class="k-sub">Forecast-Basis</div></div>
+    </div>`;
+
+  const filterBar = `
+    <div class="lager-filter-bar">
+      <div class="tab-group">
+        <button class="tab-btn ${_lagerFilter==='alle'?'active':''}" onclick="setLagerFilter('alle')">Alle (${d.summary.total})</button>
+        <button class="tab-btn ${_lagerFilter==='active'?'active':''}" onclick="setLagerFilter('active')">Aktiv (${d.summary.active})</button>
+        <button class="tab-btn ${_lagerFilter==='kritisch'?'active':''}" onclick="setLagerFilter('kritisch')">Kritisch+Warn (${d.summary.kritisch + d.summary.warn})</button>
+      </div>
+      <input type="text" placeholder="Suche Produktfamilie…" value="${_lagerSearch}"
+        oninput="setLagerSearch(this.value,event)" style="max-width:240px" />
+      <button class="btn-ghost btn-sm" onclick="loadLagerbestand()" style="margin-left:auto">↻</button>
+    </div>`;
+
+  let families = [...d.families];
+  if (_lagerFilter === 'active')   families = families.filter(f => f.active);
+  if (_lagerFilter === 'kritisch') families = families.filter(f => f.status !== 'ok');
+  if (_lagerSearch) {
+    const q = _lagerSearch.toLowerCase();
+    families = families.filter(f => f.familyKey.toLowerCase().includes(q) || f.familyName.toLowerCase().includes(q));
+  }
+
+  const blocks = families.map(fam => {
+    const rw      = fam.reichweite;
+    const dem     = fam.demand;
+    const stk     = fam.stock;
+    const mainRwColor = rw.mainWeeks === null ? 'var(--muted)'
+      : rw.mainWeeks < rw.fbmTargetWeeks * 0.5 ? 'var(--danger)'
+      : rw.mainWeeks < rw.fbmTargetWeeks       ? 'var(--warn)' : 'var(--success)';
+    const fbaRwColor = !stk.fba || rw.fbaDays === null ? 'var(--muted)'
+      : rw.fbaDays < 21 ? 'var(--danger)' : rw.fbaDays < 42 ? 'var(--warn)' : 'var(--success)';
+
+    // ── Lager-Zeile ─────────────────────────────────────────────────────────
+    const whRohware = stk.rohware
+      ? `<div class="lager-wh">
+          <div class="lager-wh-label">🌾 Rohware</div>
+          <div class="lager-wh-val">${fmtF(stk.rohware.available, 0)} <span style="font-size:0.85rem;font-weight:400">${stk.rohware.unit}</span></div>
+          <div class="lager-wh-sub">${stk.rohware.sku}</div>
+        </div>`
+      : `<div class="lager-wh"><div class="lager-wh-label">🌾 Rohware</div><div class="lager-wh-val" style="color:var(--muted)">—</div><div class="lager-wh-sub">keine Stückliste</div></div>`;
+
+    const whMain = `<div class="lager-wh">
+      <div class="lager-wh-label">🏭 MAIN Lager</div>
+      <div class="lager-wh-val" style="color:${mainRwColor}">${fmt(stk.main.available)}</div>
+      <div class="lager-wh-sub">${rw.mainWeeks !== null ? fmtF(rw.mainWeeks) + ' Wo. Reichweite' : 'kein FBM Absatz'}</div>
+    </div>`;
+
+    const whTransit = `<div class="lager-wh">
+      <div class="lager-wh-label">📦 Transit</div>
+      <div class="lager-wh-val">${fmt(stk.transit.available)}</div>
+      <div class="lager-wh-sub">bereit für Amazon</div>
+    </div>`;
+
+    const whFba = stk.fba
+      ? `<div class="lager-wh">
+          <div class="lager-wh-label">🏪 Amazon FBA</div>
+          <div class="lager-wh-val" style="color:${fbaRwColor}">${fmt(stk.fba.available)}</div>
+          <div class="lager-wh-sub" style="color:${fbaRwColor}">${rw.fbaDays ? rw.fbaDays + ' Tage Reichweite' : '—'}</div>
+        </div>`
+      : `<div class="lager-wh"><div class="lager-wh-label">🏪 Amazon FBA</div><div class="lager-wh-val" style="color:var(--muted)">—</div><div class="lager-wh-sub">kein FBA</div></div>`;
+
+    // ── Demand-Matrix ────────────────────────────────────────────────────────
+    let demandHtml = '';
+    if (dem.hasDemand || dem.fbaPerWeek > 0) {
+      const bundleRowsHtml = dem.fbmBundles.map(b => {
+        const share = dem.totalPerWeek > 0 ? Math.round(b.baseUnitsPW / dem.totalPerWeek * 100) : 0;
+        return `<div class="demand-row">
+          <span class="demand-source" style="color:var(--muted);padding-left:12px">
+            Bundle ${b.factor}er
+            <span style="font-size:0.72rem;color:var(--muted)">(${b.originalSku})</span>
+          </span>
+          <span class="demand-val">${fmtF(b.bundleSalesPW)} × ${b.factor} =</span>
+          <span class="demand-val">${fmtF(b.baseUnitsPW)} /Wo</span>
+          <span class="demand-share" style="color:var(--muted)">${share}%</span>
+        </div>`;
+      }).join('');
+
+      const fbmDirectShare = dem.totalPerWeek > 0 ? Math.round(dem.fbmDirect / dem.totalPerWeek * 100) : 0;
+      const fbmTotalShare  = dem.fbmShare;
+      const fbaShare       = dem.fbaShare;
+
+      demandHtml = `
+        <div class="demand-matrix">
+          <div class="demand-matrix-title">Nachfrage / Woche — letzte ${d.period.days} Tage · ${fam.primarySku}</div>
+          <div class="demand-row">
+            <span class="demand-source">FBM direkt <span style="font-size:0.72rem;color:var(--muted)">(${fam.primarySku})</span></span>
+            <span class="demand-val"></span>
+            <span class="demand-val">${fmtF(dem.fbmDirect)} /Wo</span>
+            <span class="demand-share">${fbmDirectShare}%</span>
+          </div>
+          ${bundleRowsHtml}
+          ${dem.fbmBundles.length > 0 ? `<div class="demand-row subtotal">
+            <span class="demand-source" style="font-weight:600">FBM gesamt</span>
+            <span class="demand-val"></span>
+            <span class="demand-val" style="color:var(--accent)">${fmtF(dem.fbmTotal)} /Wo</span>
+            <span class="demand-share">${fbmTotalShare}%</span>
+          </div>` : ''}
+          ${stk.fba ? `<div class="demand-row fba-row">
+            <span class="demand-source">Amazon FBA <span style="font-size:0.72rem;color:var(--muted)">(${fam.fbaSku} · Sellerboard)</span></span>
+            <span class="demand-val"></span>
+            <span class="demand-val">${fmtF(dem.fbaPerWeek)} /Wo</span>
+            <span class="demand-share">${fbaShare}%</span>
+          </div>` : ''}
+          <div class="demand-row grand-total">
+            <span class="demand-source">Gesamt Bedarf</span>
+            <span class="demand-val"></span>
+            <span class="demand-val">${fmtF(dem.totalPerWeek)} /Wo</span>
+            <span class="demand-share">100%</span>
+          </div>
+        </div>`;
+    }
+
+    // ── Andere Größen ────────────────────────────────────────────────────────
+    let otherHtml = '';
+    if (fam.otherSizes.length) {
+      const chips = fam.otherSizes.map(s => {
+        const cl = s.available > 0 ? 'ok' : (s.active ? 'warn' : '');
+        return `<span class="size-chip ${cl}" title="${s.name}">${s.sku} · ${fmt(s.available)} ${s.unit}</span>`;
+      }).join('');
+      otherHtml = `<div class="lager-other-sizes">${chips}</div>`;
+    }
+
+    return `
+    <div class="lager-family ${fam.status}">
+      <div class="lager-family-header">
+        <div style="flex:1;min-width:0">
+          <div class="lager-family-title">${fam.familyName || fam.familyKey}</div>
+          <div style="font-size:0.72rem;color:var(--muted)">${fam.familyKey} · ${fam.primarySku}${fam.fbaSku ? ' + ' + fam.fbaSku : ''}</div>
+        </div>
+        ${fam.active ? '<span class="badge" style="background:rgba(0,68,54,0.15);color:var(--accent)">AKTIV</span>' : ''}
+        ${stBadge(fam.status)}
+        ${dem.totalPerWeek > 0 ? `<span style="font-size:0.78rem;color:var(--muted)">${fmtF(dem.totalPerWeek)} Stk/Wo gesamt</span>` : ''}
+      </div>
+      <div class="lager-warehouses">${whRohware}${whMain}${whTransit}${whFba}</div>
+      ${demandHtml}
+      ${otherHtml}
+    </div>`;
+  }).join('');
+
+  const empty = families.length === 0
+    ? '<div class="table-box"><div style="padding:40px;text-align:center;color:var(--muted)">Keine Artikel gefunden — bitte Artikel CSV und Chargen CSV hochladen.</div></div>'
+    : blocks;
+
+  document.getElementById('lagerContent').innerHTML = summary + filterBar + empty;
+
+  // Suchfeld neu fokussieren nach Re-render
+  const sf = document.getElementById('lagerContent').querySelector('input[type=text]');
+  if (sf && _lagerSearch) { sf.focus(); sf.setSelectionRange(sf.value.length, sf.value.length); }
+}
+
+function setLagerFilter(f) { _lagerFilter = f; loadLagerbestand(); }
+function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce via timeout */ clearTimeout(window._lagerSearchT); window._lagerSearchT = setTimeout(() => loadLagerbestand(), 300); } }
 
 // ─── Transit & Sellerboard Uploads ───────────────────────────────────────────
 async function uploadStockTransit(input) {

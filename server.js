@@ -1,5 +1,10 @@
 require('dotenv').config();
 
+// Persistenter Datenpfad — auf Railway: DATA_DIR=/data (Railway Volume), lokal: __dirname
+const DATA_DIR = process.env.DATA_DIR || __dirname;
+if (DATA_DIR !== __dirname && !require('fs').existsSync(DATA_DIR))
+  require('fs').mkdirSync(DATA_DIR, { recursive: true });
+
 const express  = require('express');
 const fs       = require('fs');
 const path     = require('path');
@@ -48,8 +53,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:3000').replace(/\/$/, '');
 
 // Config-Datei (API-Keys werden lokal gespeichert)
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const LOG_FILE    = path.join(__dirname, 'update-log.json');
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const LOG_FILE    = path.join(DATA_DIR, 'update-log.json');
 
 function loadConfig() {
   let cfg = {};
@@ -328,10 +333,10 @@ function parseMrpCsv(buffer) {
 
 // ─── MRPeasy CSV Upload ───────────────────────────────────────────────────────
 
-const STOCK_FILE         = path.join(__dirname, 'stock.json');
-const TRANSIT_STOCK_FILE = path.join(__dirname, 'stock-transit.json');
-const FBA_STOCK_FILE     = path.join(__dirname, 'fba-stock.json');
-const FBA_SHIPMENTS_FILE = path.join(__dirname, 'fba-shipments.json');
+const STOCK_FILE         = path.join(DATA_DIR, 'stock.json');
+const TRANSIT_STOCK_FILE = path.join(DATA_DIR, 'stock-transit.json');
+const FBA_STOCK_FILE     = path.join(DATA_DIR, 'fba-stock.json');
+const FBA_SHIPMENTS_FILE = path.join(DATA_DIR, 'fba-shipments.json');
 
 function loadStock() {
   try { return JSON.parse(fs.readFileSync(STOCK_FILE, 'utf8')); }
@@ -419,7 +424,7 @@ app.get('/api/stock', (req, res) => {
 
 // ─── MRPeasy Articles Upload ──────────────────────────────────────────────────
 
-const ARTICLES_FILE = path.join(__dirname, 'articles.json');
+const ARTICLES_FILE = path.join(DATA_DIR, 'articles.json');
 
 function loadArticles() {
   try { return JSON.parse(fs.readFileSync(ARTICLES_FILE, 'utf8')); }
@@ -772,7 +777,7 @@ app.get('/api/export', async (req, res) => {
 
 // ─── Stücklisten (Parts) Upload ───────────────────────────────────────────────
 
-const PARTS_FILE = path.join(__dirname, 'parts-mapping.json');
+const PARTS_FILE = path.join(DATA_DIR, 'parts-mapping.json');
 
 function loadParts() {
   try { return JSON.parse(fs.readFileSync(PARTS_FILE, 'utf8')); }
@@ -963,7 +968,7 @@ app.get('/api/planung', async (req, res) => {
 
 // ─── SKU-Ziele (per-SKU Ziel-Monate Überschreibung) ──────────────────────────
 
-const SKU_TARGETS_FILE = path.join(__dirname, 'sku-targets.json');
+const SKU_TARGETS_FILE = path.join(DATA_DIR, 'sku-targets.json');
 
 function loadSkuTargets() {
   try {
@@ -1478,6 +1483,193 @@ app.get('/api/active-articles', (req, res) => {
       unterMin:    result.filter(r => r.unterMin).length,
       updatedAt:   { articles: artData.updatedAt || null, main: mainData.updatedAt || null, transit: transitData.updatedAt || null, fba: fbaData.updatedAt || null },
       items: result,
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Lagerübersicht (Multichannel, Demand-Matrix) ────────────────────────────
+//
+// Gruppiert alle Artikel nach Produktfamilie (Prefix, z.B. CREAT-FP).
+// Pro Familie: 4 Lager + Demand-Matrix (FBM direkt + Bundles + FBA).
+
+const getFamilyKey = sku =>
+  sku.replace(/-FBA$/i, '').replace(/\.\d+$/, '').replace(/-\d+$/, '');
+
+app.get('/api/lagerbestand', async (req, res) => {
+  try {
+    const cfg       = loadConfig();
+    const days      = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const weeks     = days / 7;
+    const targetMonths    = cfg.targetMonths    || 2;
+    const FBM_TARGET_WEEKS = targetMonths * 4.33;
+    const FBA_TARGET_WEEKS = 6;
+
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
+    const mainData     = loadStock();
+    const mainItems    = mainData.items || {};
+    const transitData  = loadTransitStock();
+    const transitItems = transitData.items || {};
+    const fbaData      = loadFbaStock();
+    const fbaItems     = fbaData.items || {};
+    const partsData    = loadParts();
+    const partsMap     = partsData.mapping || {};
+    const skuTargets   = loadSkuTargets();
+
+    // Shopify Demand (optional — graceful wenn nicht verbunden)
+    let lineItems = [];
+    if (cfg.shopifyDomain && cfg.shopifyToken) {
+      const shopify = new ShopifyClient(cfg.shopifyDomain, cfg.shopifyToken);
+      lineItems = await shopify.getLineItems(days);
+    }
+
+    // Demand-Aggregation pro Basis-SKU aus Shopify
+    // shopify.js löst Bundles bereits auf: isBundle, bundleFactor, originalSku, qty=resolvedQty
+    const shopifyDemand = {};
+    for (const item of lineItems) {
+      const sku = item.sku; // immer die Basis-SKU
+      if (!shopifyDemand[sku]) shopifyDemand[sku] = { direct: 0, bundles: {} };
+      if (!item.isBundle) {
+        shopifyDemand[sku].direct += item.qty;
+      } else {
+        const f = item.bundleFactor;
+        if (!shopifyDemand[sku].bundles[f])
+          shopifyDemand[sku].bundles[f] = { originalSku: item.originalSku, factor: f, bundleSales: 0, baseUnits: 0 };
+        shopifyDemand[sku].bundles[f].bundleSales += item.qty / f;
+        shopifyDemand[sku].bundles[f].baseUnits   += item.qty;
+      }
+    }
+
+    // Produktfamilien aufbauen
+    const families = {};
+    for (const [nr, art] of Object.entries(artItems)) {
+      if ((art.group || '') === 'Rohstoffe') continue;
+      const fk = getFamilyKey(nr);
+      if (!families[fk]) families[fk] = {
+        familyKey: fk, familyName: '', active: false,
+        skus: {}, fbaSku: null, rohwareNr: null, rohwareName: null,
+      };
+      const fam = families[fk];
+      // Größen-Suffix extrahieren (5, 5.3, 5-FBA, 9, …)
+      const suffixMatch = nr.match(new RegExp('^' + fk.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '-(.+)$', 'i'));
+      const suffix = suffixMatch ? suffixMatch[1] : nr;
+      fam.skus[suffix] = { sku: nr, name: art.name, active: art.active,
+        weightKg: art.weightKg || 0, unit: art.unit || 'Stk.', minQty: art.minQty || 0 };
+      if (art.active) fam.active = true;
+      if (!fam.familyName) {
+        // Produktname: Größenangabe am Ende abschneiden
+        fam.familyName = art.name.replace(/\s*[\-–]\s*\d+[\.,]?\d*\s*(kg|g|ml|l)\b.*/i, '').trim();
+      }
+      if (nr.toUpperCase().endsWith('-FBA')) fam.fbaSku = nr;
+      if (!fam.rohwareNr && partsMap[fk]) {
+        fam.rohwareNr   = partsMap[fk].rohwareNr;
+        fam.rohwareName = partsMap[fk].rohwareName;
+      }
+    }
+
+    // Ergebnis aufbauen
+    const result = [];
+    for (const fam of Object.values(families)) {
+      const primarySku = fam.familyKey + '-5';  // 1kg = Basiseinheit
+      const fba        = fam.fbaSku ? fbaItems[fam.fbaSku] : null;
+      const main       = mainItems[primarySku]    || { available: 0, inStock: 0 };
+      const transit    = transitItems[primarySku] || { available: 0 };
+      const rawArt     = fam.rohwareNr ? artItems[fam.rohwareNr] : null;
+      const artTarget  = skuTargets[primarySku] || {};
+      const fbmTargetWeeks = (artTarget.targetMonths ?? targetMonths) * 4.33;
+
+      // Demand-Matrix aus Shopify
+      const sd = shopifyDemand[primarySku] || { direct: 0, bundles: {} };
+      const directPW = sd.direct / weeks;
+      const bundleRows = Object.values(sd.bundles)
+        .map(b => ({
+          originalSku:     b.originalSku,
+          factor:          b.factor,
+          bundleSalesPW:   +(b.bundleSales / weeks).toFixed(1),
+          baseUnitsPW:     +(b.baseUnits   / weeks).toFixed(1),
+        }))
+        .sort((a, b) => a.factor - b.factor);
+      const fbmBundleTotal = bundleRows.reduce((s, b) => s + b.baseUnitsPW, 0);
+      const fbmTotal   = directPW + fbmBundleTotal;
+      const fbaPerWeek = fba ? (fba.velocity || 0) * 7 : 0;
+      const totalPW    = fbmTotal + fbaPerWeek;
+
+      // Reichweiten
+      const mainRwWeeks = fbmTotal > 0 ? main.available / fbmTotal : null;
+      const fbaDays     = fba ? fba.daysLeft : null;
+
+      // Status (schlechtester Kanal bestimmt Gesamtstatus)
+      let status = 'ok';
+      const fbmCrit  = mainRwWeeks !== null && mainRwWeeks < fbmTargetWeeks * 0.5;
+      const fbmWarn  = mainRwWeeks !== null && mainRwWeeks < fbmTargetWeeks;
+      const fbaCrit  = fba && fbaDays !== null && fbaDays < 21;
+      const fbaWarn  = fba && fbaDays !== null && fbaDays < 42;
+      if (fbmCrit || fbaCrit) status = 'kritisch';
+      else if (fbmWarn || fbaWarn) status = 'warn';
+
+      // Andere Größen aus der Familie (nicht -5 und nicht -FBA und nicht -9)
+      const otherSizes = Object.entries(fam.skus)
+        .filter(([suffix]) => suffix !== '5' && !suffix.toUpperCase().includes('FBA') && suffix !== '9')
+        .map(([suffix, info]) => ({
+          suffix, sku: info.sku, name: info.name, active: info.active,
+          available: (mainItems[info.sku] || {}).available || 0,
+          unit: info.unit,
+        }));
+
+      result.push({
+        familyKey:   fam.familyKey,
+        familyName:  fam.familyName || fam.familyKey,
+        active:      fam.active,
+        primarySku,
+        fbaSku:      fam.fbaSku || null,
+        status,
+        stock: {
+          rohware:  rawArt ? { sku: fam.rohwareNr, name: rawArt.name, available: rawArt.available, unit: rawArt.unit } : null,
+          main:     { available: main.available, inStock: main.inStock },
+          transit:  { available: transit.available },
+          fba:      fba ? { available: fba.fbaStock, daysLeft: fba.daysLeft, velocity: fba.velocity || 0 } : null,
+        },
+        demand: {
+          fbmDirect:     +directPW.toFixed(1),
+          fbmBundles:    bundleRows,
+          fbmBundleTotal: +fbmBundleTotal.toFixed(1),
+          fbmTotal:      +fbmTotal.toFixed(1),
+          fbaPerWeek:    +fbaPerWeek.toFixed(1),
+          totalPerWeek:  +totalPW.toFixed(1),
+          fbmShare: totalPW > 0 ? Math.round(fbmTotal / totalPW * 100) : 0,
+          fbaShare: totalPW > 0 ? Math.round(fbaPerWeek / totalPW * 100) : 0,
+          hasDemand: totalPW > 0,
+        },
+        reichweite: {
+          mainWeeks:      mainRwWeeks !== null ? +mainRwWeeks.toFixed(1) : null,
+          fbaDays,
+          fbmTargetWeeks: +fbmTargetWeeks.toFixed(1),
+          fbaTargetWeeks: FBA_TARGET_WEEKS,
+        },
+        otherSizes,
+      });
+    }
+
+    const stOrd = { kritisch: 0, warn: 1, ok: 2 };
+    result.sort((a, b) => {
+      if (a.status !== b.status) return stOrd[a.status] - stOrd[b.status];
+      if (a.active !== b.active) return a.active ? -1 : 1;
+      return b.demand.totalPerWeek - a.demand.totalPerWeek;
+    });
+
+    res.json({
+      period:    { days, weeks: +weeks.toFixed(1) },
+      updatedAt: { articles: artData.updatedAt || null, main: mainData.updatedAt || null, fba: fbaData.updatedAt || null },
+      summary: {
+        total:    result.length,
+        active:   result.filter(r => r.active).length,
+        kritisch: result.filter(r => r.status === 'kritisch').length,
+        warn:     result.filter(r => r.status === 'warn').length,
+      },
+      families: result,
     });
   } catch (e) {
     console.error(e);
