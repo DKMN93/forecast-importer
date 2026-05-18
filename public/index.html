@@ -1756,8 +1756,10 @@ function renderWochenplanung(d) {
       const kl   = p5 ? p5.abfuellklasse : '—';
       const lotSz = p5 ? p5.lotSize : '—';
       return `<tr>
-        <td><strong>${f.familyKey}-5</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.effRec)} Stk.</td>
+        <td><strong>${fba.skuBase || f.familyKey+'-5'}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td style="text-align:right">${fmt(fba.effRec)} Stk.</td>
+        <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
+        <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
         <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}</td>
         <td style="text-align:right;${fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)'}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : '—'}</td>
         <td style="text-align:right">${lotSz}</td>
@@ -1774,6 +1776,8 @@ function renderWochenplanung(d) {
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
+          <th style="text-align:right">Sellerboard Empfehlung</th>
+          <th style="text-align:right">Transit bereit</th>
           <th style="text-align:right">Fehlmenge</th>
           <th style="text-align:right">Aus FBM holen</th>
           <th style="text-align:right">Neu produzieren</th>

@@ -1816,6 +1816,7 @@ app.get('/api/wochenplanung', async (req, res) => {
           enRoute,
           recommendation,
           effRec,
+          shortfall,
           sendNow,
           stillMissing,
           fromFbm,
