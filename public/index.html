@@ -727,7 +727,8 @@ async function uploadStock(input) {
     const res = await fetch('/api/upload-stock', { method: 'POST', body: form });
     const data = await res.json();
     if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ ${data.skuCount} SKUs importiert (${data.language})`);
+    const transitInfo = data.transitSkuCount > 0 ? ` · Transit: ${data.transitSkuCount} SKUs (${data.transitSkus?.join(', ')})` : '';
+    toast(`✓ Main: ${data.mainSkuCount} SKUs${transitInfo}`);
     input.value = '';
   } catch (e) {
     toast('Upload fehlgeschlagen: ' + e.message, 'err');
@@ -2114,21 +2115,26 @@ function renderFbaPlanung(d) {
         </div>
       </div>
 
-      <div class="fba-lager-grid" style="grid-template-columns:repeat(3,1fr)">
+      <div class="fba-lager-grid">
         <div class="fba-lager-cell">
-          <div class="fba-lager-title">🏭 MAIN Lager (FBM)</div>
+          <div class="fba-lager-title">🏭 MAIN Lager</div>
           <div class="fba-lager-val">${fmt(item.mainStock)}</div>
-          <div class="fba-lager-sub">Min FBM: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? ' · <span style="color:var(--success)">+'+fmt(item.mainOverstock)+' für FBA verfügbar</span>' : ''}</div>
+          <div class="fba-lager-sub">Min FBM: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? '<br><span style="color:var(--success)">+'+fmt(item.mainOverstock)+' für FBA</span>' : ''}</div>
         </div>
         <div class="fba-lager-cell">
-          <div class="fba-lager-title">✈️ Unterwegs zu Amazon</div>
+          <div class="fba-lager-title">📦 Transit Amazon</div>
+          <div class="fba-lager-val" style="${item.transitStock === 0 && item.nochZuSenden > 0 ? 'color:var(--danger)' : ''}">${fmt(item.transitStock)}</div>
+          <div class="fba-lager-sub">FBA-Sticker, versandbereit</div>
+        </div>
+        <div class="fba-lager-cell">
+          <div class="fba-lager-title">✈️ Versandweg</div>
           <div class="fba-lager-val">${fmt(item.sentToFba)}</div>
-          <div class="fba-lager-sub">laut Sellerboard in Transit</div>
+          <div class="fba-lager-sub">verschickt, Amazon bucht ein</div>
         </div>
         <div class="fba-lager-cell">
           <div class="fba-lager-title">🏪 Amazon FBA</div>
           <div class="fba-lager-val" style="color:${pdColor}">${fmt(item.fbaStock)}</div>
-          <div class="fba-lager-sub" style="color:${pdColor}">${item.daysLeft > 0 ? item.daysLeft + ' Tage Reichweite' : '—'}</div>
+          <div class="fba-lager-sub" style="color:${pdColor}">${item.daysLeft > 0 ? item.daysLeft + ' Tage' : '—'}</div>
         </div>
       </div>
 
@@ -2154,9 +2160,9 @@ function renderFbaPlanung(d) {
           <div style="font-size:0.7rem;color:var(--muted)">FBA-Etikett + Transit + Amazon</div>
         </div>
         <div>
-          <div class="fba-action-label">Pipeline (FBA + unterwegs)</div>
+          <div class="fba-action-label">Pipeline gesamt</div>
           <div class="fba-action-val">${fmt(item.pipelineTotal)} Stk.</div>
-          <div style="font-size:0.7rem;color:var(--muted)">${pDays ? pDays + ' Tage Reichweite' : '—'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">Transit + Versandweg + FBA${pDays ? ' · ' + pDays + ' Tage' : ''}</div>
         </div>
       </div>
     </div>`;

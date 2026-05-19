@@ -408,14 +408,15 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
       const weight   = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
       const standort = iStandort >= 0 ? cols[iStandort] : 'Main site';
 
-      // "Amazon FBA" Standort in MRPeasy wird ignoriert:
-      // Artikel werden dorthin gebucht und nie gelöscht → kumulativ, unzuverlässig.
-      // FBA-Bestand und Transit (sentToFba) kommen ausschließlich aus Sellerboard.
+      // "Amazon FBA" Standort = kumulativer Abbucher, nie aufgeräumt → ignorieren.
+      // "Transit Amazon" = physisches Transit Lager (FBA-Sticker, versandbereit) → Transit.
+      // "Main site" = FBM + Rohware → Hauptlager.
       if (standort === 'Amazon FBA') continue;
 
-      if (!stockMain[sku]) stockMain[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
-      stockMain[sku].inStock   += inStock;
-      stockMain[sku].available += avail;
+      const target = standort === 'Transit Amazon' ? stockTransit : stockMain;
+      if (!target[sku]) target[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
+      target[sku].inStock   += inStock;
+      target[sku].available += avail;
     }
 
     const now = new Date().toISOString();
@@ -427,6 +428,7 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
       skuCount:        Object.keys(stockMain).length,
       mainSkuCount:    Object.keys(stockMain).length,
       transitSkuCount: Object.keys(stockTransit).length,
+      transitSkus:     Object.keys(stockTransit),
       language: isDE ? 'DE' : 'EN',
     });
   } catch (e) {
@@ -1442,41 +1444,46 @@ app.get('/api/fba-planung', (req, res) => {
     const fbaTargetDays     = cfg.fbaTargetDays     || 35;
     const transitTargetDays = cfg.transitTargetDays || 7;
 
-    const fbaData   = loadFbaStock();
-    const fbaItems  = fbaData.items || {};
-    const mainData  = loadStock();
-    const mainItems = mainData.items || {};
-    const artData   = loadArticles();
-    const artItems  = artData.items || {};
+    const fbaData      = loadFbaStock();
+    const fbaItems     = fbaData.items || {};
+    const mainData     = loadStock();
+    const mainItems    = mainData.items || {};
+    const transitData  = loadTransitStock();
+    const transitItems = transitData.items || {};
+    const artData      = loadArticles();
+    const artItems     = artData.items || {};
 
-    // Datenquellen komplett aus Sellerboard:
-    // fba.fbaStock    = Bestand bei Amazon
-    // fba.sentToFba   = Unterwegs zu Amazon (Sellerboard trackt das)
-    // fba.recommendedReorder = Sellerboard-Empfehlung
-    // MRPeasy "Amazon FBA" Standort wird ignoriert (kumulativ, nie aufgeräumt)
+    // Datenquellen:
+    // MRPeasy "Main site"      → mainItems (FBM + Rohware)
+    // MRPeasy "Transit Amazon" → transitItems (physisches Transit Lager, FBA-Sticker drauf)
+    // MRPeasy "Amazon FBA"     → ignoriert (kumulativer Abbucher, nie aufgeräumt)
+    // Sellerboard sentToFba    → bereits versendet, Amazon bucht noch ein
+    // Sellerboard fbaStock     → bei Amazon verfügbar
 
     const result = [];
 
     for (const [skuFba, fba] of Object.entries(fbaItems)) {
       const skuBase    = skuFba.replace(/-FBA$/i, '');
-      const main       = mainItems[skuBase] || { available: 0, inStock: 0 };
-      const art        = artItems[skuBase]  || null;
+      const main       = mainItems[skuBase]    || { available: 0, inStock: 0 };
+      const transit    = transitItems[skuBase] || { available: 0 };
+      const art        = artItems[skuBase]     || null;
 
-      const sentToFba  = fba.sentToFba || 0;   // Unterwegs zu Amazon (Sellerboard)
-      const velocity   = fba.velocity > 0 ? fba.velocity
-                       : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
+      const transitStock = transit.available;                 // Physisches Transit Lager (MRPeasy)
+      const sentToFba    = fba.sentToFba || 0;               // Versandweg zu Amazon (Sellerboard)
+      const velocity     = fba.velocity > 0 ? fba.velocity
+                         : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
 
-      // Pipeline = was Amazon in den nächsten Wochen bekommt
-      const pipelineTotal = fba.fbaStock + sentToFba;
+      // Pipeline = Transit Lager + Versandweg + Amazon FBA
+      const pipelineTotal = fba.fbaStock + sentToFba + transitStock;
       const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
 
-      // Was noch vorbereitet + versendet werden muss
-      const recommendation  = fba.recommendedReorder || 0;
-      const nochZuSenden    = Math.max(0, recommendation - sentToFba);
+      // Was noch aus MAIN vorbereitet + versendet werden muss
+      const recommendation   = fba.recommendedReorder || 0;
+      const nochZuSenden     = Math.max(0, recommendation - sentToFba - transitStock);
 
       // Aus FBM-Überbestand entnehmen?
-      const fbmMinQty       = art ? (art.minQty || 0) : 0;
-      const mainOverstock   = Math.max(0, main.available - fbmMinQty);
+      const fbmMinQty        = art ? (art.minQty || 0) : 0;
+      const mainOverstock    = Math.max(0, main.available - fbmMinQty);
       const ausMainEntnehmen = Math.min(nochZuSenden, mainOverstock);
       const zuProduzierenFba = Math.max(0, nochZuSenden - ausMainEntnehmen);
 
@@ -1492,7 +1499,8 @@ app.get('/api/fba-planung', (req, res) => {
         fbaStock:      fba.fbaStock,
         velocity:      +velocity.toFixed(2),
         daysLeft:      fba.daysLeft,
-        sentToFba,                           // Unterwegs (Sellerboard)
+        transitStock,                        // Transit Amazon (MRPeasy)
+        sentToFba,                           // Versandweg zu Amazon (Sellerboard)
         mainStock:     main.available,
         fbmMinQty,
         mainOverstock,
