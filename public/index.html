@@ -2044,8 +2044,7 @@ function renderFbaPlanung(d) {
     <div class="fba-import-bar">
       <span style="font-weight:700;color:var(--text)">FBA Wochenplanung</span>
       <span>FBA: <strong>${fmtDate(d.updatedAt.fbaStock)}</strong></span>
-      <span>Sendungen: <strong>${fmtDate(d.updatedAt.shipments)}</strong></span>
-      <span>Transit: <strong>${fmtDate(d.updatedAt.transit)}</strong></span>
+      <span>MAIN: <strong>${fmtDate(d.updatedAt.main)}</strong></span>
       <span>Lead Time: <strong>${d.leadTimes.totalDays} Tage</strong> (${d.leadTimes.prodDays}d Produktion + ${d.leadTimes.amazonDays}d Amazon)</span>
       <button class="btn-ghost btn-sm" onclick="loadFbaPlanung()" style="margin-left:auto">↻ Aktualisieren</button>
     </div>`;
@@ -2158,7 +2157,7 @@ function renderAktiveArtikel(d) {
     <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
       <span>Artikel ${fmtDate(d.updatedAt.articles)}</span>
       <span>MAIN ${fmtDate(d.updatedAt.main)}</span>
-      <span>Transit ${fmtDate(d.updatedAt.transit)}</span>
+      <span>MAIN ${fmtDate(d.updatedAt.main)}</span>
       <span>FBA ${fmtDate(d.updatedAt.fba)}</span>
       <button class="btn-ghost btn-sm" onclick="loadAktiveArtikel()">↻ Aktualisieren</button>
     </div>`;

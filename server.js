@@ -1494,7 +1494,7 @@ app.get('/api/fba-planung', (req, res) => {
     result.sort((a, b) => (stOrd[a.status] - stOrd[b.status]) || (a.pipelineDays - b.pipelineDays));
 
     res.json({
-      updatedAt: { fbaStock: fbaData.updatedAt || null, shipments: shipData.updatedAt || null, transit: transitData.updatedAt || null, main: mainData.updatedAt || null },
+      updatedAt: { fbaStock: fbaData.updatedAt || null, main: mainData.updatedAt || null },
       leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL },
       summary: {
         total:    result.length,
