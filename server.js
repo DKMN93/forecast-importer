@@ -154,7 +154,7 @@ app.get('/api/config', (req, res) => {
     lieferzeitWochen:  cfg.lieferzeitWochen || 2,
     // Lager-Zielreichweiten (Tage)
     rohwareTargetDays: cfg.rohwareTargetDays || 28,
-    fbmTargetDays:     cfg.fbmTargetDays     || 50,
+    fbmTargetDays:     cfg.fbmTargetDays     || 30,
     transitTargetDays: cfg.transitTargetDays || 7,
     fbaTargetDays:     cfg.fbaTargetDays     || 35,
     configured:        !!(cfg.shopifyDomain && cfg.shopifyToken)
@@ -1602,7 +1602,7 @@ app.get('/api/lagerbestand', async (req, res) => {
     const cfg       = loadConfig();
     const days      = parseInt(req.query.days) || cfg.forecastDays || 90;
     const weeks     = days / 7;
-    const fbmTargetDays    = cfg.fbmTargetDays  || 50;
+    const fbmTargetDays    = cfg.fbmTargetDays  || 30;
     const fbaTargetDays    = cfg.fbaTargetDays  || 35;
     const FBM_TARGET_WEEKS = fbmTargetDays / 7;
     const FBA_TARGET_WEEKS = fbaTargetDays / 7;
@@ -1790,7 +1790,7 @@ app.get('/api/wochenplanung', async (req, res) => {
     const cfg               = loadConfig();
     const days              = parseInt(req.query.days) || cfg.forecastDays || 90;
     const weeks             = days / 7;
-    const fbmTargetDays     = cfg.fbmTargetDays     || 50;
+    const fbmTargetDays     = cfg.fbmTargetDays     || 30;
     const rohwareTargetDays = cfg.rohwareTargetDays || 28;
     const transitTargetDays = cfg.transitTargetDays || 7;
     const fbaTargetDays     = cfg.fbaTargetDays     || 35;
