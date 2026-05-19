@@ -494,6 +494,31 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <p class="form-hint">Für Stockout-Risk-Berechnung. Pro SKU überschreibbar.</p>
             </div>
           </div>
+
+          <div style="margin:20px 0 12px;font-size:0.78rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted)">Lager-Zielreichweiten</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">Rohware (Tage)</label>
+              <input type="number" id="cfg_rohware_days" value="28" min="7" max="180" step="1" />
+              <p class="form-hint">Standard: 28 Tage (LT 3–5d + Slotting 7d + Prod 5d + Puffer)</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">FBM Lager (Tage)</label>
+              <input type="number" id="cfg_fbm_days" value="50" min="14" max="180" step="1" />
+              <p class="form-hint">Standard: 50 Tage (Recovery-Stack + Sicherheit)</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Transit Pipeline-Min (Tage)</label>
+              <input type="number" id="cfg_transit_days" value="7" min="1" max="30" step="1" />
+              <p class="form-hint">Standard: 7 Tage (Mindest-Pipeline zu Amazon)</p>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Amazon FBA (Tage)</label>
+              <input type="number" id="cfg_fba_days" value="35" min="14" max="90" step="1" />
+              <p class="form-hint">Standard: 35 Tage (Ranking-Schutz + Receiving-Puffer)</p>
+            </div>
+          </div>
+
           <div style="display:flex; gap:10px; margin-top:8px">
             <button class="btn-primary" onclick="saveSettings()">Speichern</button>
             <button class="btn-ghost" onclick="testShopify()">Shopify testen</button>
@@ -1434,20 +1459,28 @@ async function loadLog() {
 async function loadSettings() {
   try {
     const cfg = await api('/config');
-    document.getElementById('cfg_domain').value     = cfg.shopifyDomain    || '';
-    document.getElementById('cfg_days').value       = cfg.forecastDays     || 90;
-    document.getElementById('cfg_months').value     = cfg.targetMonths     || 2;
-    document.getElementById('cfg_lieferzeit').value = cfg.lieferzeitWochen || 2;
+    document.getElementById('cfg_domain').value        = cfg.shopifyDomain    || '';
+    document.getElementById('cfg_days').value          = cfg.forecastDays     || 90;
+    document.getElementById('cfg_months').value        = cfg.targetMonths     || 2;
+    document.getElementById('cfg_lieferzeit').value    = cfg.lieferzeitWochen || 2;
+    document.getElementById('cfg_rohware_days').value  = cfg.rohwareTargetDays || 28;
+    document.getElementById('cfg_fbm_days').value      = cfg.fbmTargetDays    || 50;
+    document.getElementById('cfg_transit_days').value  = cfg.transitTargetDays || 7;
+    document.getElementById('cfg_fba_days').value      = cfg.fbaTargetDays    || 35;
   } catch (e) {}
 }
 
 async function saveSettings() {
   const body = {
-    shopifyDomain:    document.getElementById('cfg_domain').value.trim(),
-    shopifyToken:     document.getElementById('cfg_token').value.trim(),
-    forecastDays:     document.getElementById('cfg_days').value,
-    targetMonths:     document.getElementById('cfg_months').value,
-    lieferzeitWochen: document.getElementById('cfg_lieferzeit').value,
+    shopifyDomain:     document.getElementById('cfg_domain').value.trim(),
+    shopifyToken:      document.getElementById('cfg_token').value.trim(),
+    forecastDays:      document.getElementById('cfg_days').value,
+    targetMonths:      document.getElementById('cfg_months').value,
+    lieferzeitWochen:  document.getElementById('cfg_lieferzeit').value,
+    rohwareTargetDays: document.getElementById('cfg_rohware_days').value,
+    fbmTargetDays:     document.getElementById('cfg_fbm_days').value,
+    transitTargetDays: document.getElementById('cfg_transit_days').value,
+    fbaTargetDays:     document.getElementById('cfg_fba_days').value,
   };
   try {
     await api('/config', { method: 'POST', body: JSON.stringify(body) });

@@ -147,19 +147,25 @@ app.get('/auth/callback', async (req, res) => {
 app.get('/api/config', (req, res) => {
   const cfg = loadConfig();
   res.json({
-    shopifyDomain:  cfg.shopifyDomain || '',
-    shopifyToken:     cfg.shopifyToken ? '***' : '',
-    targetMonths:     cfg.targetMonths  || cfg.targetWeeks || 2,
-    forecastDays:     cfg.forecastDays  || 90,
-    lieferzeitWochen: cfg.lieferzeitWochen || 2,
-    configured:       !!(cfg.shopifyDomain && cfg.shopifyToken)
+    shopifyDomain:     cfg.shopifyDomain || '',
+    shopifyToken:      cfg.shopifyToken ? '***' : '',
+    targetMonths:      cfg.targetMonths  || cfg.targetWeeks || 2,
+    forecastDays:      cfg.forecastDays  || 90,
+    lieferzeitWochen:  cfg.lieferzeitWochen || 2,
+    // Lager-Zielreichweiten (Tage)
+    rohwareTargetDays: cfg.rohwareTargetDays || 28,
+    fbmTargetDays:     cfg.fbmTargetDays     || 50,
+    transitTargetDays: cfg.transitTargetDays || 7,
+    fbaTargetDays:     cfg.fbaTargetDays     || 35,
+    configured:        !!(cfg.shopifyDomain && cfg.shopifyToken)
   });
 });
 
 app.post('/api/config', (req, res) => {
   const cfg = loadConfig();
   const { shopifyDomain, shopifyToken, shopifyClientId, shopifyClientSecret,
-          targetMonths, forecastDays, lieferzeitWochen } = req.body;
+          targetMonths, forecastDays, lieferzeitWochen,
+          rohwareTargetDays, fbmTargetDays, transitTargetDays, fbaTargetDays } = req.body;
 
   if (shopifyDomain)       cfg.shopifyDomain       = shopifyDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
   if (shopifyClientId)     cfg.shopifyClientId     = shopifyClientId;
@@ -168,6 +174,10 @@ app.post('/api/config', (req, res) => {
   if (targetMonths)        cfg.targetMonths        = parseFloat(targetMonths);
   if (forecastDays)        cfg.forecastDays        = parseInt(forecastDays);
   if (lieferzeitWochen)    cfg.lieferzeitWochen    = parseFloat(lieferzeitWochen);
+  if (rohwareTargetDays)   cfg.rohwareTargetDays   = parseInt(rohwareTargetDays);
+  if (fbmTargetDays)       cfg.fbmTargetDays       = parseInt(fbmTargetDays);
+  if (transitTargetDays)   cfg.transitTargetDays   = parseInt(transitTargetDays);
+  if (fbaTargetDays)       cfg.fbaTargetDays       = parseInt(fbaTargetDays);
 
   saveConfig(cfg);
   res.json({ ok: true });
@@ -1428,6 +1438,10 @@ const FBA_LEAD_TOTAL  = FBA_PROD_DAYS + FBA_AMAZON_DAYS;
 
 app.get('/api/fba-planung', (req, res) => {
   try {
+    const cfg       = loadConfig();
+    const fbaTargetDays     = cfg.fbaTargetDays     || 35;
+    const transitTargetDays = cfg.transitTargetDays || 7;
+
     const fbaData   = loadFbaStock();
     const fbaItems  = fbaData.items || {};
     const mainData  = loadStock();
@@ -1466,8 +1480,10 @@ app.get('/api/fba-planung', (req, res) => {
       const ausMainEntnehmen = Math.min(nochZuSenden, mainOverstock);
       const zuProduzierenFba = Math.max(0, nochZuSenden - ausMainEntnehmen);
 
-      const status = pipelineDays < FBA_LEAD_TOTAL     ? 'kritisch'
-                   : pipelineDays < FBA_LEAD_TOTAL * 2 ? 'warn' : 'ok';
+      // Kritisch = unter Lead Time (kann nicht rechtzeitig nachfüllen)
+      // Warn = unter Zielreichweite (35 Tage)
+      const status = pipelineDays < FBA_LEAD_TOTAL ? 'kritisch'
+                   : pipelineDays < fbaTargetDays  ? 'warn' : 'ok';
 
       result.push({
         skuFba, skuBase,
@@ -1495,7 +1511,7 @@ app.get('/api/fba-planung', (req, res) => {
 
     res.json({
       updatedAt: { fbaStock: fbaData.updatedAt || null, main: mainData.updatedAt || null },
-      leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL },
+      leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL, fbaTargetDays, transitTargetDays },
       summary: {
         total:    result.length,
         kritisch: result.filter(r => r.status === 'kritisch').length,
@@ -1578,9 +1594,10 @@ app.get('/api/lagerbestand', async (req, res) => {
     const cfg       = loadConfig();
     const days      = parseInt(req.query.days) || cfg.forecastDays || 90;
     const weeks     = days / 7;
-    const targetMonths    = cfg.targetMonths    || 2;
-    const FBM_TARGET_WEEKS = targetMonths * 4.33;
-    const FBA_TARGET_WEEKS = 6;
+    const fbmTargetDays    = cfg.fbmTargetDays  || 50;
+    const fbaTargetDays    = cfg.fbaTargetDays  || 35;
+    const FBM_TARGET_WEEKS = fbmTargetDays / 7;
+    const FBA_TARGET_WEEKS = fbaTargetDays / 7;
 
     const artData      = loadArticles();
     const artItems     = artData.items || {};
@@ -1762,11 +1779,14 @@ app.get('/api/lagerbestand', async (req, res) => {
 
 app.get('/api/wochenplanung', async (req, res) => {
   try {
-    const cfg          = loadConfig();
-    const days         = parseInt(req.query.days) || cfg.forecastDays || 90;
-    const weeks        = days / 7;
-    const targetMonths = cfg.targetMonths || 2;
-    const targetWeeks  = targetMonths * 4.33;
+    const cfg               = loadConfig();
+    const days              = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const weeks             = days / 7;
+    const fbmTargetDays     = cfg.fbmTargetDays     || 50;
+    const rohwareTargetDays = cfg.rohwareTargetDays || 28;
+    const transitTargetDays = cfg.transitTargetDays || 7;
+    const fbaTargetDays     = cfg.fbaTargetDays     || 35;
+    const targetWeeks       = fbmTargetDays / 7;
 
     const artData      = loadArticles();
     const artItems     = artData.items || {};
