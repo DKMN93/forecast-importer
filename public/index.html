@@ -1902,48 +1902,57 @@ function renderWochenplanung(d) {
 
   // ── Sektion 4: Einkaufen ───────────────────────────────────────────────────
   // Zeige alle Familien mit Einkaufsbedarf ODER mit offenen Bestellungen
-  const einkaufFam = d.families.filter(f => f.einkauf.buySacks > 0 || f.einkauf.incomingKg > 0);
+  // Nur Artikel mit offener Kaufaktion — gedeckte Artikel sind keine Aufgabe mehr
+  const kaufenFam  = d.families.filter(f => f.einkauf.stillBuySacks > 0);
+  const gedecktFam = d.families.filter(f => f.einkauf.stillBuySacks === 0 && f.einkauf.incomingKg > 0);
   let section4 = '';
-  if (einkaufFam.length) {
+  {
     const fmtKg = v => v != null ? v.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—';
-    const rows = einkaufFam.map(f => {
+
+    // Tabelle: Offen — Handlungsbedarf
+    const offenRows = kaufenFam.map(f => {
       const e = f.einkauf;
-      const poInfo = e.incomingOrders && e.incomingOrders.length
+      const poInfo = e.incomingOrders?.length
         ? e.incomingOrders.map(o => `${o.poNr}: ${o.menge} kg${o.liefdat ? ' (erw. ' + o.liefdat + ')' : ''}`).join('<br>')
-        : '';
-      const stillColor = e.stillBuySacks > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--success)';
+        : '—';
       return `<tr>
         <td><strong>${f.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="font-size:0.82rem">${f.familyKey}</td>
-        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke<br><span style="color:var(--muted);font-size:0.75rem">${fmtKg(f.poolKg)} KG</span></td>
+        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke / ${fmtKg(f.poolKg)} KG</td>
         <td style="text-align:right">${fmtKg(e.totalProdKg)} KG</td>
-        <td style="text-align:right">${fmtKg(e.buyKg)} KG<br><span style="color:var(--muted);font-size:0.75rem">${fmt(e.buySacks)} Säcke</span></td>
         <td style="text-align:right">${e.incomingKg > 0
-          ? `<span style="color:var(--success);font-weight:700">${fmtKg(e.incomingKg)} KG</span><div style="font-size:0.7rem;color:var(--muted)">${poInfo}</div>`
+          ? `<span style="color:var(--success)">${fmtKg(e.incomingKg)} KG</span><div style="font-size:0.7rem;color:var(--muted)">${poInfo}</div>`
           : '<span style="color:var(--muted)">—</span>'}</td>
-        <td style="text-align:right;${stillColor}">${e.stillBuySacks > 0
-          ? `${fmtKg(e.stillToBuyKg)} KG<br>${fmt(e.stillBuySacks)} Säcke`
-          : '<span style="font-weight:400">✓ Gedeckt</span>'}</td>
+        <td style="text-align:right;color:var(--danger);font-weight:700">${fmtKg(e.stillToBuyKg)} KG<br><span style="font-size:0.8rem">${fmt(e.stillBuySacks)} Säcke</span></td>
       </tr>`;
     }).join('');
+
+    // Kompakte Info-Zeile: bereits gedeckt durch PO
+    const gedecktInfo = gedecktFam.length ? `
+      <div style="padding:10px 20px;font-size:0.78rem;color:var(--muted);border-top:1px solid var(--border);background:var(--surface2)">
+        ✓ Bereits gedeckt durch offene Bestellungen: ${gedecktFam.map(f => `<strong>${f.rohwareNr}</strong> (${fmtKg(f.einkauf.incomingKg)} KG im Zulauf)`).join(' · ')}
+      </div>` : '';
+
     section4 = `
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">🛒</span>
         <h3>4. Einkaufen (Rohware)</h3>
-        <span class="wp-badge">${einkaufFam.length} Rohware${einkaufFam.length !== 1 ? 'n' : ''}</span>
+        ${kaufenFam.length > 0
+          ? `<span class="wp-badge">${kaufenFam.length} offen</span>`
+          : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Alles gedeckt</span>`}
       </div>
-      <div class="table-wrap"><table>
+      ${kaufenFam.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>
           <th>Rohware (AXY)</th><th>Familie</th>
           <th style="text-align:right">-9 Pool</th>
           <th style="text-align:right">Produktionsbedarf</th>
-          <th style="text-align:right">Brutto-Bedarf</th>
-          <th style="text-align:right">Im Zulauf (Verschickt)</th>
+          <th style="text-align:right">Im Zulauf</th>
           <th style="text-align:right">Noch kaufen</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
+        <tbody>${offenRows}</tbody>
+      </table></div>` : '<div class="wp-empty">Kein Einkaufsbedarf — alle Rohwaren durch Pool oder offene Bestellungen gedeckt.</div>'}
+      ${gedecktInfo}
     </div>`;
   }
 
