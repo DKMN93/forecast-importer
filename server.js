@@ -398,11 +398,14 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
       const weight   = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
       const standort = iStandort >= 0 ? cols[iStandort] : 'Main site';
 
-      // Standort "Amazon FBA" in MRPeasy = unser Transitlager (für Amazon vorbereitete Ware)
-      const target = standort === 'Amazon FBA' ? stockTransit : stockMain;
-      if (!target[sku]) target[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
-      target[sku].inStock   += inStock;
-      target[sku].available += avail;
+      // "Amazon FBA" Standort in MRPeasy wird ignoriert:
+      // Artikel werden dorthin gebucht und nie gelöscht → kumulativ, unzuverlässig.
+      // FBA-Bestand und Transit (sentToFba) kommen ausschließlich aus Sellerboard.
+      if (standort === 'Amazon FBA') continue;
+
+      if (!stockMain[sku]) stockMain[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
+      stockMain[sku].inStock   += inStock;
+      stockMain[sku].available += avail;
     }
 
     const now = new Date().toISOString();
@@ -1425,63 +1428,64 @@ const FBA_LEAD_TOTAL  = FBA_PROD_DAYS + FBA_AMAZON_DAYS;
 
 app.get('/api/fba-planung', (req, res) => {
   try {
-    const fbaData      = loadFbaStock();
-    const fbaItems     = fbaData.items || {};
-    const shipData     = loadFbaShipments();
-    const inTransit    = shipData.inTransit || {};
-    const transitData  = loadTransitStock();
-    const transitItems = (transitData.items) || {};
-    const mainData     = loadStock();
-    const mainItems    = (mainData.items) || {};
-    const artData      = loadArticles();
-    const artItems     = artData.items || {};
+    const fbaData   = loadFbaStock();
+    const fbaItems  = fbaData.items || {};
+    const mainData  = loadStock();
+    const mainItems = mainData.items || {};
+    const artData   = loadArticles();
+    const artItems  = artData.items || {};
+
+    // Datenquellen komplett aus Sellerboard:
+    // fba.fbaStock    = Bestand bei Amazon
+    // fba.sentToFba   = Unterwegs zu Amazon (Sellerboard trackt das)
+    // fba.recommendedReorder = Sellerboard-Empfehlung
+    // MRPeasy "Amazon FBA" Standort wird ignoriert (kumulativ, nie aufgeräumt)
 
     const result = [];
 
     for (const [skuFba, fba] of Object.entries(fbaItems)) {
-      const skuBase = skuFba.replace(/-FBA$/i, '');
-      const transit  = transitItems[skuBase] || { available: 0, inStock: 0 };
-      const main     = mainItems[skuBase]    || { available: 0, inStock: 0 };
-      const art      = artItems[skuBase]     || null;
-      const trData   = inTransit[skuFba]     || { shipped: 0, received: 0 };
+      const skuBase    = skuFba.replace(/-FBA$/i, '');
+      const main       = mainItems[skuBase] || { available: 0, inStock: 0 };
+      const art        = artItems[skuBase]  || null;
 
-      const unitsEnRoute = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
-      const velocity = fba.velocity > 0 ? fba.velocity
-        : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
+      const sentToFba  = fba.sentToFba || 0;   // Unterwegs zu Amazon (Sellerboard)
+      const velocity   = fba.velocity > 0 ? fba.velocity
+                       : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
 
-      const pipelineTotal = fba.fbaStock + transit.available + unitsEnRoute;
+      // Pipeline = was Amazon in den nächsten Wochen bekommt
+      const pipelineTotal = fba.fbaStock + sentToFba;
       const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
 
-      const versandEmpfehlung = Math.max(0, fba.recommendedReorder - unitsEnRoute);
-      const versandMoeglich   = Math.min(versandEmpfehlung, transit.available);
-      const transitShortfall  = Math.max(0, versandEmpfehlung - transit.available);
-      const fbmMinQty         = art ? (art.minQty || 0) : 0;
-      const mainOverstock     = Math.max(0, main.available - fbmMinQty);
-      const ausMainEntnehmen  = Math.min(transitShortfall, mainOverstock);
-      const zuProduzierenFba  = Math.max(0, transitShortfall - ausMainEntnehmen);
+      // Was noch vorbereitet + versendet werden muss
+      const recommendation  = fba.recommendedReorder || 0;
+      const nochZuSenden    = Math.max(0, recommendation - sentToFba);
 
-      const status = pipelineDays < FBA_LEAD_TOTAL       ? 'kritisch'
-                   : pipelineDays < FBA_LEAD_TOTAL * 2   ? 'warn' : 'ok';
+      // Aus FBM-Überbestand entnehmen?
+      const fbmMinQty       = art ? (art.minQty || 0) : 0;
+      const mainOverstock   = Math.max(0, main.available - fbmMinQty);
+      const ausMainEntnehmen = Math.min(nochZuSenden, mainOverstock);
+      const zuProduzierenFba = Math.max(0, nochZuSenden - ausMainEntnehmen);
+
+      const status = pipelineDays < FBA_LEAD_TOTAL     ? 'kritisch'
+                   : pipelineDays < FBA_LEAD_TOTAL * 2 ? 'warn' : 'ok';
 
       result.push({
         skuFba, skuBase,
-        name:  fba.title || (art ? art.name : skuBase),
-        asin:  fba.asin || '',
-        fbaStock:    fba.fbaStock,
-        velocity:    +velocity.toFixed(2),
-        daysLeft:    fba.daysLeft,
-        unitsEnRoute,
-        transitStock:    transit.available,
-        mainStock:       main.available,
+        name:     fba.title || (art ? art.name : skuBase),
+        asin:     fba.asin || '',
+        fbaStock:      fba.fbaStock,
+        velocity:      +velocity.toFixed(2),
+        daysLeft:      fba.daysLeft,
+        sentToFba,                           // Unterwegs (Sellerboard)
+        mainStock:     main.available,
         fbmMinQty,
         mainOverstock,
-        pipelineTotal:   Math.round(pipelineTotal),
-        pipelineDays:    pipelineDays < 999 ? +pipelineDays.toFixed(1) : 999,
-        versandEmpfehlung: Math.round(versandEmpfehlung),
-        versandMoeglich:   Math.round(versandMoeglich),
-        transitShortfall:  Math.round(transitShortfall),
-        ausMainEntnehmen:  Math.round(ausMainEntnehmen),
-        zuProduzierenFba:  Math.round(zuProduzierenFba),
+        pipelineTotal: Math.round(pipelineTotal),
+        pipelineDays:  pipelineDays < 999 ? +pipelineDays.toFixed(1) : 999,
+        recommendation: Math.round(recommendation),
+        nochZuSenden:   Math.round(nochZuSenden),
+        ausMainEntnehmen: Math.round(ausMainEntnehmen),
+        zuProduzierenFba: Math.round(zuProduzierenFba),
         status,
       });
     }
@@ -1497,7 +1501,7 @@ app.get('/api/fba-planung', (req, res) => {
         kritisch: result.filter(r => r.status === 'kritisch').length,
         warn:     result.filter(r => r.status === 'warn').length,
         ok:       result.filter(r => r.status === 'ok').length,
-        zuVersenden:   result.reduce((s, r) => s + r.versandMoeglich, 0),
+        zuVersenden:   result.reduce((s, r) => s + r.nochZuSenden, 0),
         zuProduzieren: result.reduce((s, r) => s + r.zuProduzierenFba, 0),
       },
       items: result,

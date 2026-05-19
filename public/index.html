@@ -2082,54 +2082,49 @@ function renderFbaPlanung(d) {
         </div>
       </div>
 
-      <div class="fba-lager-grid">
+      <div class="fba-lager-grid" style="grid-template-columns:repeat(3,1fr)">
         <div class="fba-lager-cell">
           <div class="fba-lager-title">🏭 MAIN Lager (FBM)</div>
           <div class="fba-lager-val">${fmt(item.mainStock)}</div>
-          <div class="fba-lager-sub">Min: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? ' · <span style="color:var(--warn)">+'+fmt(item.mainOverstock)+' Überschuss</span>' : ''}</div>
+          <div class="fba-lager-sub">Min FBM: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? ' · <span style="color:var(--success)">+'+fmt(item.mainOverstock)+' für FBA verfügbar</span>' : ''}</div>
         </div>
         <div class="fba-lager-cell">
-          <div class="fba-lager-title">📦 Transit Lager</div>
-          <div class="fba-lager-val" style="${item.transitStock === 0 && item.versandEmpfehlung > 0 ? 'color:var(--danger)' : ''}">${fmt(item.transitStock)}</div>
-          <div class="fba-lager-sub">versandbereit für Amazon</div>
-        </div>
-        <div class="fba-lager-cell">
-          <div class="fba-lager-title">✈️ Unterwegs</div>
-          <div class="fba-lager-val">${fmt(item.unitsEnRoute)}</div>
-          <div class="fba-lager-sub">in aktiven Sendungen</div>
+          <div class="fba-lager-title">✈️ Unterwegs zu Amazon</div>
+          <div class="fba-lager-val">${fmt(item.sentToFba)}</div>
+          <div class="fba-lager-sub">laut Sellerboard in Transit</div>
         </div>
         <div class="fba-lager-cell">
           <div class="fba-lager-title">🏪 Amazon FBA</div>
           <div class="fba-lager-val" style="color:${pdColor}">${fmt(item.fbaStock)}</div>
-          <div class="fba-lager-sub">${item.daysLeft > 0 ? item.daysLeft + ' Tage Reichweite' : '—'}</div>
+          <div class="fba-lager-sub" style="color:${pdColor}">${item.daysLeft > 0 ? item.daysLeft + ' Tage Reichweite' : '—'}</div>
         </div>
       </div>
 
       <div class="fba-actions">
         <div>
-          <div class="fba-action-label">Versand-Empfehlung</div>
-          <div class="fba-action-val ${item.versandEmpfehlung > 0 ? 'warn' : 'muted'}">${item.versandEmpfehlung > 0 ? fmt(item.versandEmpfehlung) + ' Stk.' : '—'}</div>
-          <div style="font-size:0.7rem;color:var(--muted)">lt. Sellerboard</div>
+          <div class="fba-action-label">Sellerboard Empfehlung</div>
+          <div class="fba-action-val ${item.recommendation > 0 ? 'warn' : 'muted'}">${item.recommendation > 0 ? fmt(item.recommendation) + ' Stk.' : '—'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">gesamt nachbestellen</div>
         </div>
         <div>
-          <div class="fba-action-label">Jetzt versenden</div>
-          <div class="fba-action-val ${item.versandMoeglich > 0 ? 'success' : 'muted'}">${item.versandMoeglich > 0 ? fmt(item.versandMoeglich) + ' Stk.' : '—'}</div>
-          <div style="font-size:0.7rem;color:var(--muted)">aus Transit möglich</div>
+          <div class="fba-action-label">Noch vorbereiten + senden</div>
+          <div class="fba-action-val ${item.nochZuSenden > 0 ? 'warn' : 'success'}">${item.nochZuSenden > 0 ? fmt(item.nochZuSenden) + ' Stk.' : '✓ Gedeckt'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">Empfehlung − unterwegs</div>
         </div>
         ${item.ausMainEntnehmen > 0 ? `<div>
-          <div class="fba-action-label">Aus MAIN holen</div>
-          <div class="fba-action-val warn">${fmt(item.ausMainEntnehmen)} Stk.</div>
-          <div style="font-size:0.7rem;color:var(--muted)">→ Transit vorbereiten</div>
+          <div class="fba-action-label">Aus FBM-Überbestand</div>
+          <div class="fba-action-val success">${fmt(item.ausMainEntnehmen)} Stk.</div>
+          <div style="font-size:0.7rem;color:var(--muted)">→ etikettieren + senden</div>
         </div>` : ''}
         <div>
-          <div class="fba-action-label">Produzieren für FBA</div>
-          <div class="fba-action-val ${item.zuProduzierenFba > 0 ? 'danger' : 'success'}">${item.zuProduzierenFba > 0 ? fmt(item.zuProduzierenFba) + ' Stk.' : '✓ Ausreichend'}</div>
-          <div style="font-size:0.7rem;color:var(--muted)">neue Produktion</div>
+          <div class="fba-action-label">Neu produzieren für FBA</div>
+          <div class="fba-action-val ${item.zuProduzierenFba > 0 ? 'danger' : 'success'}">${item.zuProduzierenFba > 0 ? fmt(item.zuProduzierenFba) + ' Stk.' : '✓ Kein Bedarf'}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">FBA-Etikett + Transit + Amazon</div>
         </div>
         <div>
-          <div class="fba-action-label">Pipeline gesamt</div>
+          <div class="fba-action-label">Pipeline (FBA + unterwegs)</div>
           <div class="fba-action-val">${fmt(item.pipelineTotal)} Stk.</div>
-          <div style="font-size:0.7rem;color:var(--muted)">FBA + Transit + unterwegs</div>
+          <div style="font-size:0.7rem;color:var(--muted)">${pDays ? pDays + ' Tage Reichweite' : '—'}</div>
         </div>
       </div>
     </div>`;
