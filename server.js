@@ -1679,7 +1679,7 @@ app.get('/api/lagerbestand', async (req, res) => {
       const transit    = transitItems[primarySku] || { available: 0 };
       const rawArt     = fam.rohwareNr ? artItems[fam.rohwareNr] : null;
       const artTarget  = skuTargets[primarySku] || {};
-      const fbmTargetWeeks = (artTarget.targetMonths ?? targetMonths) * 4.33;
+      const fbmTargetWeeks = artTarget.targetMonths ? artTarget.targetMonths * 4.33 : FBM_TARGET_WEEKS;
 
       // Demand-Matrix aus Shopify
       const sd = shopifyDemand[primarySku] || { direct: 0, bundles: {} };
