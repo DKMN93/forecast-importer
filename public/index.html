@@ -532,6 +532,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
             <button class="btn-ghost" onclick="downloadExcel()" style="text-align:left">Excel herunterladen (Übersicht)</button>
             <button class="btn-ghost" onclick="downloadCsv()" style="text-align:left">CSV herunterladen (MRPeasy Import)</button>
             <button class="btn-primary" onclick="downloadReorderCsv()" style="text-align:left">Mindestbestand CSV → MRPeasy Import</button>
+            <button class="btn-primary" onclick="downloadInventory()" style="text-align:left;background:var(--success, #16a34a)">Inventur Export (Steuerberater)</button>
           </div>
         </div>
 
@@ -768,6 +769,25 @@ async function downloadReorderCsv() {
     a.click();
     URL.revokeObjectURL(url);
     toast('Mindestbestand CSV heruntergeladen ✓');
+  } catch (e) {
+    toast('Fehler: ' + e.message, 'err');
+  }
+}
+
+// ─── Inventur Export (Steuerberater) ─────────────────────────────────────────
+async function downloadInventory() {
+  toast('Inventur wird erstellt… bitte warten');
+  try {
+    const res = await fetch('/api/export/inventory');
+    if (!res.ok) { toast('Fehler beim Erstellen der Inventur', 'err'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'Inventur_' + new Date().toISOString().slice(0,10) + '.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('Inventur Export heruntergeladen ✓');
   } catch (e) {
     toast('Fehler: ' + e.message, 'err');
   }
@@ -2137,7 +2157,7 @@ function renderFbaPlanung(d) {
         </div>
         <div class="fba-lager-cell">
           <div class="fba-lager-title">✈️ Versandweg</div>
-          <div class="fba-lager-val">${fmt(item.sentToFba)}</div>
+          <div class="fba-lager-val">${fmt(item.enRoute)}</div>
           <div class="fba-lager-sub">verschickt, Amazon bucht ein</div>
         </div>
         <div class="fba-lager-cell">

@@ -345,6 +345,7 @@ function parseMrpCsv(buffer) {
 
 const STOCK_FILE         = path.join(DATA_DIR, 'stock.json');
 const TRANSIT_STOCK_FILE = path.join(DATA_DIR, 'stock-transit.json');
+const STOCK_FULL_FILE    = path.join(DATA_DIR, 'stock-full.json');
 const FBA_STOCK_FILE     = path.join(DATA_DIR, 'fba-stock.json');
 const FBA_SHIPMENTS_FILE = path.join(DATA_DIR, 'fba-shipments.json');
 const PO_FILE            = path.join(DATA_DIR, 'purchase-orders.json');
@@ -352,6 +353,10 @@ const PO_FILE            = path.join(DATA_DIR, 'purchase-orders.json');
 function loadStock() {
   try { return JSON.parse(fs.readFileSync(STOCK_FILE, 'utf8')); }
   catch { return {}; }
+}
+function loadStockFull() {
+  try { return JSON.parse(fs.readFileSync(STOCK_FULL_FILE, 'utf8')); }
+  catch { return { items: [] }; }
 }
 function loadTransitStock() {
   try { return JSON.parse(fs.readFileSync(TRANSIT_STOCK_FILE, 'utf8')); }
@@ -391,28 +396,52 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
     const iName     = idx(isDE ? 'Artikelbezeichnung' : 'Part description');
     const iUnit     = idx(isDE ? 'Maßeinheit'         : 'UoM');
     const iWeight   = idx('Gewicht in kg');
-    const iStandort = idx('Standort'); // "Main site" vs "Amazon FBA" (= Transitlager)
+    const iStandort = idx('Standort');
+    const iGruppe   = idx('Gruppenname');        // nur Lots-Export
+    const iCost     = idx('Kosten pro Einheit'); // nur Lots-Export
 
     if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes CSV-Format' });
 
-    // Pro SKU + Standort aggregieren — ein Upload deckt alle Lager ab
+    const IGNORIERTE_GRUPPEN = new Set(['Beutel', 'Etiketten', 'Kartons']);
+    const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
+
+    // stockMain / stockTransit: gefiltert für Planungsberechnungen
     const stockMain    = {};
     const stockTransit = {};
+    // stockFull: vollständig inkl. Packmittel + gewichtete Ø-Kosten für Inventur-Export
+    const stockFull    = {}; // key = "standort|SKU"
 
     for (let i = 1; i < lines.length; i++) {
       const cols    = parseRow(lines[i]);
-      const sku     = cols[iSku];
+      const sku     = (cols[iSku] || '').toUpperCase();
       if (!sku) continue;
-      const inStock  = parseFloat((cols[iStock]  || '0').replace(',', '.')) || 0;
-      const avail    = parseFloat((cols[iAvail]  || '0').replace(',', '.')) || 0;
-      const weight   = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
       const standort = iStandort >= 0 ? cols[iStandort] : 'Main site';
+      if (standort === 'Amazon FBA') continue; // ERP-Umbuchung, immer ignorieren
 
-      // "Amazon FBA" Standort = kumulativer Abbucher, nie aufgeräumt → ignorieren.
-      // "Transit Amazon" = physisches Transit Lager (FBA-Sticker, versandbereit) → Transit.
-      // "Main site" = FBM + Rohware → Hauptlager.
-      if (standort === 'Amazon FBA') continue;
+      const gruppe   = iGruppe >= 0 ? cols[iGruppe] : '';
+      const inStock  = pf(cols[iStock]);
+      const avail    = pf(cols[iAvail]);
+      const weight   = pf(cols[iWeight]);
+      const cost     = iCost >= 0 ? pf(cols[iCost]) : 0;
 
+      // ── stock-full: alle Standorte, alle Gruppen (inkl. Packmittel) ──
+      const fullKey = standort + '|' + sku;
+      if (!stockFull[fullKey]) {
+        stockFull[fullKey] = {
+          sku, standort, name: cols[iName] || '', gruppe,
+          unit: cols[iUnit] || 'Stk.', weightKg: weight,
+          inStock: 0, available: 0, costSum: 0, costQty: 0,
+        };
+      }
+      stockFull[fullKey].inStock   += inStock;
+      stockFull[fullKey].available += avail;
+      if (cost > 0 && inStock > 0) {
+        stockFull[fullKey].costSum += cost * inStock;
+        stockFull[fullKey].costQty += inStock;
+      }
+
+      // ── stockMain / stockTransit: Packmittel ausfiltern, für Planung ──
+      if (IGNORIERTE_GRUPPEN.has(gruppe)) continue;
       const target = standort === 'Transit Amazon' ? stockTransit : stockMain;
       if (!target[sku]) target[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
       target[sku].inStock   += inStock;
@@ -422,6 +451,19 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
     const now = new Date().toISOString();
     fs.writeFileSync(STOCK_FILE,         JSON.stringify({ updatedAt: now, items: stockMain    }, null, 2));
     fs.writeFileSync(TRANSIT_STOCK_FILE, JSON.stringify({ updatedAt: now, items: stockTransit }, null, 2));
+
+    // stock-full: gewichteten Ø-Einheitspreis berechnen und speichern
+    const fullItemsArr = Object.values(stockFull).map(it => {
+      const avgCost = it.costQty > 0 ? +(it.costSum / it.costQty).toFixed(6) : 0;
+      return {
+        sku: it.sku, standort: it.standort, name: it.name, gruppe: it.gruppe,
+        unit: it.unit, weightKg: it.weightKg,
+        available: it.available, inStock: it.inStock,
+        avgCostPerUnit: avgCost,
+        totalValue: +(it.available * avgCost).toFixed(2),
+      };
+    });
+    fs.writeFileSync(STOCK_FULL_FILE, JSON.stringify({ updatedAt: now, items: fullItemsArr }, null, 2));
 
     res.json({
       ok: true,
@@ -787,6 +829,155 @@ app.get('/api/export', async (req, res) => {
     const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
     const filename = `Forecast_${new Date().toISOString().slice(0,10)}.xlsx`;
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Inventur-Export (Steuerberater) ─────────────────────────────────────────
+// Stichtags-Inventur: alle Lagerplätze mit verfügbaren Mengen + Einstandskosten.
+// Nur "Verfügbar" wird gewertet — keine Ware in Zulauf, keine reservierte Ware.
+
+app.get('/api/export/inventory', (req, res) => {
+  try {
+    const dateStr = new Date().toISOString().slice(0, 10);
+
+    const fullData  = loadStockFull();
+    const fullItems = fullData.items || [];
+    const fbaData   = loadFbaStock();
+    const fbaItems  = fbaData.items || {};
+    const shipData  = loadFbaShipments();
+    const inTransit = shipData.inTransit || {};
+
+    // Kosten-Lookup: SKU → Ø Einstandspreis (aus Lots-Upload)
+    const costMap = {};
+    for (const it of fullItems) {
+      if (it.avgCostPerUnit > 0 && !costMap[it.sku]) costMap[it.sku] = it.avgCostPerUnit;
+    }
+    const getCost = sku => {
+      const base = sku.replace(/-FBA$/i, '');
+      return costMap[base] || costMap[sku] || 0;
+    };
+
+    // Gruppen-Etiketten für Steuerberater
+    const gruppeLabel = g => {
+      if (['Beutel', 'Etiketten', 'Kartons'].includes(g)) return 'Packmittel / Hilfsstoffe';
+      return g || 'Fertigware';
+    };
+    const lagerBeschreibung = (standort, gruppe, sku) => {
+      if (standort === 'Transit Amazon') return 'FBA-Transit Lager (bei uns, versandbereit)';
+      if (gruppe === 'Rohstoffe') return 'Hauptlager – Rohstoffe';
+      if (['Beutel', 'Etiketten', 'Kartons'].includes(gruppe)) return 'Hauptlager – Packmittel';
+      if (sku.endsWith('-9')) return 'Hauptlager – Herstellergebinde (Rohware in Gebinde)';
+      return 'Hauptlager – Fertigware';
+    };
+
+    const rows = [];
+    const headers = [
+      'Lagerplatz', 'Lagerplatz Beschreibung',
+      'Artikelnummer', 'Artikelname', 'Produktgruppe',
+      'Verfügbare Menge', 'Maßeinheit',
+      'Einheitspreis Ø (€)', 'Gesamtwert (€)',
+    ];
+
+    // ── 1. Main Lager + Transit Lager (aus stock-full.json) ──
+    const GRUPPEN_ORDER = { 'Rohstoffe': 0, 'Fertigware': 1, 'Beutel': 2, 'Etiketten': 2, 'Kartons': 2 };
+    const mainSorted = fullItems
+      .filter(it => it.available > 0 && it.standort !== 'Amazon FBA')
+      .sort((a, b) => {
+        if (a.standort !== b.standort) return a.standort === 'Transit Amazon' ? 1 : -1;
+        return (GRUPPEN_ORDER[a.gruppe] ?? 9) - (GRUPPEN_ORDER[b.gruppe] ?? 9) || a.sku.localeCompare(b.sku);
+      });
+
+    for (const it of mainSorted) {
+      const standortLabel = it.standort === 'Transit Amazon' ? 'Transit Lager' : 'Hauptlager';
+      rows.push([
+        standortLabel,
+        lagerBeschreibung(it.standort, it.gruppe, it.sku),
+        it.sku,
+        it.name,
+        gruppeLabel(it.gruppe),
+        it.available,
+        it.unit,
+        it.avgCostPerUnit > 0 ? it.avgCostPerUnit : '',
+        it.totalValue    > 0 ? it.totalValue     : '',
+      ]);
+    }
+
+    // ── 2. Ware unterwegs zu Amazon (Sellerboard Shipments) ──
+    for (const [skuFba, trData] of Object.entries(inTransit)) {
+      const enRoute = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
+      if (enRoute <= 0) continue;
+      const baseSku = skuFba.replace(/-FBA$/i, '');
+      const fba     = fbaItems[skuFba];
+      const cost    = getCost(baseSku);
+      rows.push([
+        'Amazon FBA – Unterwegs',
+        'Versendet, auf dem Weg zum Amazon Warehouse (noch nicht eingebucht)',
+        baseSku,
+        fba ? fba.title.substring(0, 100) : baseSku,
+        'Fertigware',
+        enRoute,
+        'Stk.',
+        cost > 0 ? cost : '',
+        cost > 0 ? +(enRoute * cost).toFixed(2) : '',
+      ]);
+    }
+
+    // ── 3. Amazon FBA Lager (Sellerboard) ──
+    for (const [skuFba, fba] of Object.entries(fbaItems)) {
+      if ((fba.fbaStock || 0) <= 0) continue;
+      const baseSku = skuFba.replace(/-FBA$/i, '');
+      const cost    = getCost(baseSku);
+      rows.push([
+        'Amazon FBA Lager',
+        'Im Amazon Warehouse verfügbar (FBA-Versand)',
+        baseSku,
+        (fba.title || baseSku).substring(0, 100),
+        'Fertigware',
+        fba.fbaStock,
+        'Stk.',
+        cost > 0 ? cost : '',
+        cost > 0 ? +(fba.fbaStock * cost).toFixed(2) : '',
+      ]);
+    }
+
+    // ── Summenzeile ──
+    const totalVal = rows.reduce((s, r) => s + (typeof r[8] === 'number' ? r[8] : 0), 0);
+    rows.push(['', '', '', '', '', '', '', 'GESAMT', +totalVal.toFixed(2)]);
+
+    // ── Excel bauen ──
+    const sheetData = [headers, ...rows];
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.aoa_to_sheet(sheetData);
+    ws['!cols'] = [
+      {wch:24}, {wch:48}, {wch:18}, {wch:55}, {wch:22},
+      {wch:16}, {wch:10}, {wch:18}, {wch:16},
+    ];
+
+    // Datenquellen-Info als zweites Sheet
+    const infoRows = [
+      ['Inventur-Export', `Stichtag: ${dateStr}`],
+      [],
+      ['Datenquelle', 'Datei', 'Stand'],
+      ['Hauptlager & Transit', 'MRPeasy Chargen-Export (stock_lots)', fullData.updatedAt || '—'],
+      ['Amazon FBA Lager', 'Sellerboard Lager-Export', fbaData.updatedAt || '—'],
+      ['Amazon FBA unterwegs', 'Sellerboard Sendungen-Export', shipData.updatedAt || '—'],
+      [],
+      ['Hinweis:', 'Es werden nur verfügbare Mengen ("Verfügbar") gewertet.'],
+      ['', 'Reservierte Ware (Gebucht) und Ware im Zulauf sind nicht enthalten.'],
+    ];
+    const wsInfo = xlsx.utils.aoa_to_sheet(infoRows);
+    wsInfo['!cols'] = [{wch:30}, {wch:50}, {wch:20}];
+
+    xlsx.utils.book_append_sheet(wb, ws,     `Inventur_${dateStr}`);
+    xlsx.utils.book_append_sheet(wb, wsInfo, 'Datenquellen');
+
+    const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename="Inventur_${dateStr}.xlsx"`);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.send(buf);
   } catch (e) {
@@ -1307,7 +1498,7 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
     const iShipId   = findCol('shipment id');
     const iProducts = findCol('products');
     const iShipped  = findCol('units shipped');
-    const iReceived = findCol('units received');
+    const iReceived = headers.indexOf('units received'); // exact match — "% of units received" must not match
     const iStatus   = findCol('status');
     const iDate     = findCol('date');
 
@@ -1452,13 +1643,15 @@ app.get('/api/fba-planung', (req, res) => {
     const transitItems = transitData.items || {};
     const artData      = loadArticles();
     const artItems     = artData.items || {};
+    const shipData     = loadFbaShipments();
+    const inTransit    = shipData.inTransit || {};
 
-    // Datenquellen:
-    // MRPeasy "Main site"      → mainItems (FBM + Rohware)
-    // MRPeasy "Transit Amazon" → transitItems (physisches Transit Lager, FBA-Sticker drauf)
-    // MRPeasy "Amazon FBA"     → ignoriert (kumulativer Abbucher, nie aufgeräumt)
-    // Sellerboard sentToFba    → bereits versendet, Amazon bucht noch ein
-    // Sellerboard fbaStock     → bei Amazon verfügbar
+    // Datenbasis (eine Quelle pro Lager):
+    // MRPeasy "Main site"      → mainItems (FBM-Fertigware + Rohware)
+    // MRPeasy "Transit Amazon" → transitItems (FBA-Sticker drauf, noch bei uns, noch nicht versendet)
+    // MRPeasy "Amazon FBA"     → ignoriert (Umbuchung damit Ware aus ERP verschwindet)
+    // Sellerboard Shipments    → inTransit (versendet, auf dem Weg zu Amazon)
+    // Sellerboard Lager        → fbaStock (aktuell im Amazon Warehouse verfügbar)
 
     const result = [];
 
@@ -1468,18 +1661,19 @@ app.get('/api/fba-planung', (req, res) => {
       const transit    = transitItems[skuBase] || { available: 0 };
       const art        = artItems[skuBase]     || null;
 
-      const transitStock = transit.available;                 // Physisches Transit Lager (MRPeasy)
-      const sentToFba    = fba.sentToFba || 0;               // Versandweg zu Amazon (Sellerboard)
+      const transitStock = transit.available;   // MRPeasy Transit Amazon: bei uns, FBA-Sticker drauf
+      const trData       = inTransit[skuFba] || { shipped: 0, received: 0 };
+      const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0)); // Sellerboard Shipments: auf dem Weg
       const velocity     = fba.velocity > 0 ? fba.velocity
                          : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
 
-      // Pipeline = Transit Lager + Versandweg + Amazon FBA
-      const pipelineTotal = fba.fbaStock + sentToFba + transitStock;
+      // Pipeline = FBA Transit (MRPeasy) + unterwegs zu Amazon (Shipments) + im Amazon Warehouse (Sellerboard)
+      const pipelineTotal = fba.fbaStock + enRoute + transitStock;
       const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
 
       // Was noch aus MAIN vorbereitet + versendet werden muss
       const recommendation   = fba.recommendedReorder || 0;
-      const nochZuSenden     = Math.max(0, recommendation - sentToFba - transitStock);
+      const nochZuSenden     = Math.max(0, recommendation - enRoute - transitStock);
 
       // Aus FBM-Überbestand entnehmen?
       const fbmMinQty        = art ? (art.minQty || 0) : 0;
@@ -1499,8 +1693,8 @@ app.get('/api/fba-planung', (req, res) => {
         fbaStock:      fba.fbaStock,
         velocity:      +velocity.toFixed(2),
         daysLeft:      fba.daysLeft,
-        transitStock,                        // Transit Amazon (MRPeasy)
-        sentToFba,                           // Versandweg zu Amazon (Sellerboard)
+        transitStock,                        // MRPeasy Transit Amazon (bei uns, noch nicht versendet)
+        enRoute,                             // Sellerboard Shipments (versendet, unterwegs)
         mainStock:     main.available,
         fbmMinQty,
         mainOverstock,
@@ -1518,7 +1712,7 @@ app.get('/api/fba-planung', (req, res) => {
     result.sort((a, b) => (stOrd[a.status] - stOrd[b.status]) || (a.pipelineDays - b.pipelineDays));
 
     res.json({
-      updatedAt: { fbaStock: fbaData.updatedAt || null, main: mainData.updatedAt || null },
+      updatedAt: { fbaStock: fbaData.updatedAt || null, main: mainData.updatedAt || null, shipments: shipData.updatedAt || null },
       leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL, fbaTargetDays, transitTargetDays },
       summary: {
         total:    result.length,
