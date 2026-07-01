@@ -464,6 +464,8 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
         available: it.available, inStock: it.inStock,
         avgCostPerUnit: avgCost,
         totalValue: +(it.available * avgCost).toFixed(2),
+        costSum: it.costSum,  // für globalen Ø-Preis im Inventur-Export
+        costQty: it.costQty,
       };
     });
     fs.writeFileSync(STOCK_FULL_FILE, JSON.stringify({ updatedAt: now, items: fullItemsArr }, null, 2));
@@ -855,14 +857,19 @@ app.get('/api/export/inventory', (req, res) => {
     const shipData  = loadFbaShipments();
     const inTransit = shipData.inTransit || {};
 
-    // Kosten-Lookup: SKU → Ø Einstandspreis (aus Lots-Upload)
-    const costMap = {};
+    // Kosten-Lookup: globaler gewichteter Ø-Einstandspreis über alle Standorte pro SKU.
+    // Verhindert, dass die Reihenfolge im CSV (Transit vor Main) den Preis verfälscht.
+    const globalCostAgg = {};
     for (const it of fullItems) {
-      if (it.avgCostPerUnit > 0 && !costMap[it.sku]) costMap[it.sku] = it.avgCostPerUnit;
+      if (!globalCostAgg[it.sku]) globalCostAgg[it.sku] = { costSum: 0, costQty: 0 };
+      globalCostAgg[it.sku].costSum += it.costSum || 0;
+      globalCostAgg[it.sku].costQty += it.costQty || 0;
     }
     const getCost = sku => {
       const base = sku.replace(/-FBA$/i, '');
-      return costMap[base] || costMap[sku] || 0;
+      const g = globalCostAgg[base] || globalCostAgg[sku];
+      if (g && g.costQty > 0) return +(g.costSum / g.costQty).toFixed(6);
+      return 0;
     };
 
     // Gruppen-Etiketten für Steuerberater
