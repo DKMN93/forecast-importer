@@ -391,24 +391,6 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
           <button class="btn-primary" onclick="showView('dashboard')" style="width:100%;margin-bottom:10px">
             Weiter zum Dashboard
           </button>
-          <button class="btn-ghost" onclick="downloadExcel()" style="width:100%;margin-bottom:10px">
-            Excel herunterladen (Übersicht)
-          </button>
-          <button class="btn-ghost" onclick="downloadCsv()" style="width:100%;margin-bottom:10px">
-            CSV herunterladen (MRPeasy Import)
-          </button>
-          <label style="display:block;width:100%;margin-bottom:10px">
-            <div class="btn-ghost" style="width:100%;text-align:center;cursor:pointer;box-sizing:border-box">
-              Artikel hochladen (articles CSV aus MRPeasy)
-            </div>
-            <input type="file" accept=".csv" style="display:none" onchange="uploadArticles(this)">
-          </label>
-          <label style="display:block;width:100%;margin-bottom:10px">
-            <div class="btn-ghost" style="width:100%;text-align:center;cursor:pointer;box-sizing:border-box">
-              Chargen hochladen (stock_lots CSV aus MRPeasy)
-            </div>
-            <input type="file" accept=".csv" style="display:none" onchange="uploadStock(this)">
-          </label>
           <div id="setupResult" style="margin-top:12px; font-size:0.85rem;"></div>
         </div>
       </div>
@@ -2021,22 +2003,7 @@ function renderWochenplanung(d) {
     metaBar + summaryCards + section1 + section2 + section3 + section4 + section5;
 }
 
-// ─── Transit & Sellerboard Uploads ───────────────────────────────────────────
-async function uploadStockTransit(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Transitlager wird geladen…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-stock-transit', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ Transitlager: ${data.skuCount} SKUs importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
-}
-
+// ─── Sellerboard Uploads ─────────────────────────────────────────────────────
 async function uploadSellerboardLager(input) {
   const file = input.files[0];
   if (!file) return;
@@ -2224,7 +2191,6 @@ function renderAktiveArtikel(d) {
     </div>
     <div style="font-size:0.75rem;color:var(--muted);margin-bottom:12px;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
       <span>Artikel ${fmtDate(d.updatedAt.articles)}</span>
-      <span>MAIN ${fmtDate(d.updatedAt.main)}</span>
       <span>MAIN ${fmtDate(d.updatedAt.main)}</span>
       <span>FBA ${fmtDate(d.updatedAt.fba)}</span>
       <button class="btn-ghost btn-sm" onclick="loadAktiveArtikel()">↻ Aktualisieren</button>
