@@ -904,6 +904,8 @@ app.get('/api/export/inventory', (req, res) => {
 
     for (const it of mainSorted) {
       const standortLabel = it.standort === 'Transit Amazon' ? 'Transit Lager' : 'Hauptlager';
+      const costGlobal = getCost(it.sku);
+      const unitCost   = costGlobal > 0 ? costGlobal : (it.avgCostPerUnit > 0 ? it.avgCostPerUnit : 0);
       rows.push([
         standortLabel,
         lagerBeschreibung(it.standort, it.gruppe, it.sku),
@@ -912,8 +914,8 @@ app.get('/api/export/inventory', (req, res) => {
         gruppeLabel(it.gruppe),
         it.available,
         it.unit,
-        it.avgCostPerUnit > 0 ? it.avgCostPerUnit : '',
-        it.totalValue    > 0 ? it.totalValue     : '',
+        unitCost > 0 ? unitCost : '',
+        unitCost > 0 ? +(it.available * unitCost).toFixed(2) : '',
       ]);
     }
 
