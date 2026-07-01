@@ -2128,7 +2128,8 @@ app.get('/api/wochenplanung', async (req, res) => {
         const recommendation = fbaItem.recommendedReorder || 0;
         const trData       = inTransit[fbaSku] || { shipped: 0, received: 0 };
         const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
-        const effRec       = Math.max(0, recommendation - enRoute);
+        const atFba        = (fbaItem.fbaStock || 0) + (fbaItem.fbaReserved || 0);
+        const effRec       = Math.max(0, recommendation - atFba - enRoute);
         const shortfall    = Math.max(0, effRec - transitAvail);
         const fromFbm      = Math.min(shortfall, fbmOverstock);
         const newProd      = Math.max(0, shortfall - fromFbm);
@@ -2141,10 +2142,12 @@ app.get('/api/wochenplanung', async (req, res) => {
           skuFba:         fbaSku,
           skuBase:        primarySku,
           fbaStock:       fbaItem.fbaStock || 0,
+          fbaReserved:    fbaItem.fbaReserved || 0,
           fbaDaysLeft:    fbaItem.daysLeft || 0,
           fbaVelocity:    fbaItem.velocity || 0,
           transitAvail,
           enRoute,
+          atFba,
           recommendation,
           effRec,
           shortfall,

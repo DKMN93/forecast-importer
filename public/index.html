@@ -1753,7 +1753,7 @@ function renderWochenplanung(d) {
       const daysColor    = fba.fbaDaysLeft < 21 ? 'color:var(--danger)' : fba.fbaDaysLeft < 42 ? 'color:var(--warn)' : 'color:var(--success)';
       return `<tr>
         <td><strong>${f.familyKey}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right">${fmt(fba.fbaStock)}</td>
+        <td style="text-align:right">${fmt(fba.fbaStock)}${fba.fbaReserved > 0 ? '<div style="font-size:0.73rem;color:var(--muted)">+' + fmt(fba.fbaReserved) + ' reserv.</div>' : ''}</td>
         <td style="text-align:right;${daysColor}">${fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : '—'}</td>
         <td style="text-align:right">${fmt(fba.transitAvail)}</td>
         <td style="text-align:right;${sendColor}">${fba.sendNow > 0 ? fmt(fba.sendNow) + ' Stk.' : '—'}</td>
@@ -1804,7 +1804,7 @@ function renderWochenplanung(d) {
       const lotSz = p5 ? p5.lotSize : '—';
       return `<tr>
         <td><strong>${fba.skuBase || f.familyKey+'-5'}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right">${fmt(fba.effRec)} Stk.</td>
+        <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
         <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
         <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
         <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}</td>
@@ -1823,7 +1823,7 @@ function renderWochenplanung(d) {
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
-          <th style="text-align:right">Sellerboard Empfehlung</th>
+          <th style="text-align:right">Noch benötigt (netto)</th>
           <th style="text-align:right">Transit bereit</th>
           <th style="text-align:right">Fehlmenge</th>
           <th style="text-align:right">Aus FBM holen</th>
