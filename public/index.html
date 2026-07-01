@@ -316,6 +316,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div id="connectionStatus" style="font-size:0.78rem; color: var(--muted);">
       <span class="status-dot" id="shopifyDot"></span>Shopify
     </div>
+    <div id="deployInfo" style="font-size:0.68rem; color: var(--muted); margin-top:6px; opacity:0.6;"></div>
   </div>
 </nav>
 
@@ -635,6 +636,12 @@ async function init() {
   try {
     const cfg = await api('/config');
     updateConnectionDots(cfg.configured);
+    if (cfg.deployedAt) {
+      const d = new Date(cfg.deployedAt);
+      document.getElementById('deployInfo').textContent =
+        'Deploy: ' + d.toLocaleDateString('de-DE', { day:'2-digit', month:'2-digit', year:'2-digit' }) +
+        ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' });
+    }
     if (cfg.configured) {
       showView('dashboard');
       testShopify(true); // silent test

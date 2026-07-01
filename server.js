@@ -9,6 +9,8 @@ const express  = require('express');
 const fs       = require('fs');
 const path     = require('path');
 const crypto   = require('crypto');
+
+const SERVER_START = new Date().toISOString();
 const fetch    = require('node-fetch');
 const helmet   = require('helmet');
 
@@ -157,7 +159,8 @@ app.get('/api/config', (req, res) => {
     fbmTargetDays:     cfg.fbmTargetDays     || 30,
     transitTargetDays: cfg.transitTargetDays || 7,
     fbaTargetDays:     cfg.fbaTargetDays     || 35,
-    configured:        !!(cfg.shopifyDomain && cfg.shopifyToken)
+    configured:        !!(cfg.shopifyDomain && cfg.shopifyToken),
+    deployedAt:        SERVER_START,
   });
 });
 
