@@ -838,8 +838,8 @@ app.get('/api/export', async (req, res) => {
 });
 
 // ─── Inventur-Export (Steuerberater) ─────────────────────────────────────────
-// Stichtags-Inventur: alle Lagerplätze mit verfügbaren Mengen + Einstandskosten.
-// Nur "Verfügbar" wird gewertet — keine Ware in Zulauf, keine reservierte Ware.
+// Stichtags-Inventur: alle Lagerplätze mit Mengen + Einstandskosten.
+// Amazon FBA: verfügbar + reserviert (FC-Transfers + Kundenbestellungen) = Gesamteigentum bei Amazon.
 
 app.get('/api/export/inventory', (req, res) => {
   try {
@@ -928,21 +928,40 @@ app.get('/api/export/inventory', (req, res) => {
     }
 
     // ── 3. Amazon FBA Lager (Sellerboard) ──
+    // Verfügbar + Reserviert (FC-Transfers & Kundenbestellungen) = Gesamteigentum bei Amazon
     for (const [skuFba, fba] of Object.entries(fbaItems)) {
-      if ((fba.fbaStock || 0) <= 0) continue;
+      const avail    = fba.fbaStock    || 0;
+      const reserved = fba.fbaReserved || 0;
+      if (avail <= 0 && reserved <= 0) continue;
       const baseSku = skuFba.replace(/-FBA$/i, '');
       const cost    = getCost(baseSku);
-      rows.push([
-        'Amazon FBA Lager',
-        'Im Amazon Warehouse verfügbar (FBA-Versand)',
-        baseSku,
-        (fba.title || baseSku).substring(0, 100),
-        'Fertigware',
-        fba.fbaStock,
-        'Stk.',
-        cost > 0 ? cost : '',
-        cost > 0 ? +(fba.fbaStock * cost).toFixed(2) : '',
-      ]);
+      const title   = (fba.title || baseSku).substring(0, 100);
+      if (avail > 0) {
+        rows.push([
+          'Amazon FBA Lager',
+          'Im Amazon Warehouse – Verfügbar zum Kauf',
+          baseSku,
+          title,
+          'Fertigware',
+          avail,
+          'Stk.',
+          cost > 0 ? cost : '',
+          cost > 0 ? +(avail * cost).toFixed(2) : '',
+        ]);
+      }
+      if (reserved > 0) {
+        rows.push([
+          'Amazon FBA Lager',
+          'Im Amazon Warehouse – Reserviert (FC-Transfer & Kundenbestellungen)',
+          baseSku,
+          title,
+          'Fertigware',
+          reserved,
+          'Stk.',
+          cost > 0 ? cost : '',
+          cost > 0 ? +(reserved * cost).toFixed(2) : '',
+        ]);
+      }
     }
 
     // ── Summenzeile ──
@@ -1444,6 +1463,7 @@ app.post('/api/upload-sellerboard-lager', upload.single('file'), (req, res) => {
     const iAsin       = findCol('asin');
     const iTitle      = findCol('title');
     const iStock      = findCol('fba/fbm stock');
+    const iReserved   = findCol('reserved');
     const iVelocity   = findCol('estimated', 'velocity');
     const iDaysLeft   = findCol('days', 'stock', 'left');
     const iRecommended = findCol('recommended', 'quantity', 'reorder');
@@ -1465,6 +1485,7 @@ app.post('/api/upload-sellerboard-lager', upload.single('file'), (req, res) => {
         asin:              String(row[iAsin]  || '').trim(),
         title:             String(row[iTitle] || '').trim().substring(0, 80),
         fbaStock:          pf(row[iStock]),
+        fbaReserved:       iReserved >= 0 ? pf(row[iReserved]) : 0,
         velocity:          iVelocity    >= 0 ? pf(row[iVelocity])    : 0,
         daysLeft:          iDaysLeft    >= 0 ? pf(row[iDaysLeft])    : 0,
         recommendedReorder: iRecommended >= 0 ? pf(row[iRecommended]) : 0,
