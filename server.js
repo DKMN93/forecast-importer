@@ -1536,7 +1536,8 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
     if (iShipId === -1 || iProducts === -1) return res.status(400).json({ error: 'Unbekanntes Shipments-Format' });
 
     const pf = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; };
-    const ACTIVE_STATUSES = ['RECEIVING', 'WORKING', 'SHIPPED', 'IN_TRANSIT'];
+    // Sellerboard exports Status as empty for most shipments — only skip explicitly closed ones
+    const INACTIVE_STATUSES = ['CLOSED', 'CANCELLED', 'DELETED', 'ERROR'];
 
     const shipments = [];
     let current = null;
@@ -1556,7 +1557,7 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
 
       // Update status if found on a later row for same shipment
       if (!shipId && status && !current.status) current.status = status;
-      if (!shipId && status && ACTIVE_STATUSES.includes(status)) current.status = status;
+      if (!shipId && status && !INACTIVE_STATUSES.includes(status)) current.status = status;
 
       // Product line: "Title/ASIN/SKU" — SKU is after the last "/"
       if (products.includes('/')) {
@@ -1568,10 +1569,10 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
       }
     }
 
-    // Build per-SKU inTransit index for active shipments
+    // Build per-SKU inTransit index — skip only explicitly closed/cancelled shipments
     const inTransit = {};
     for (const s of shipments) {
-      if (!ACTIVE_STATUSES.includes(s.status)) continue;
+      if (INACTIVE_STATUSES.includes(s.status)) continue;
       for (const p of s.products) {
         if (!inTransit[p.sku]) inTransit[p.sku] = { shipped: 0, received: 0 };
         inTransit[p.sku].shipped  += p.shipped;
