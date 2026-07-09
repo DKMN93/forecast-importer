@@ -2114,20 +2114,24 @@ app.get('/api/wochenplanung', async (req, res) => {
         return s + p.prodNeed * (art ? (art.weightKg || 0) : 0);
       }, 0);
 
-      // FBA
-      const fbaSku  = prefix + '-5-FBA';
-      const fbaItem = fbaItems[fbaSku];
-      let fbaResult = null;
+      // FBA — alle Gebindegrößen (-1 bis -5) berücksichtigen, nicht nur -5
+      const fbaResults = [];
       let totalFbaKg = 0;
 
-      if (fbaItem) {
-        const primarySku  = prefix + '-5';
-        const art5        = artItems[primarySku];
+      for (const sz of sizes) {
+        const fbaSku  = prefix + '-' + sz + '-FBA';
+        const fbaItem = fbaItems[fbaSku];
+        if (!fbaItem) continue;
+
+        const primarySku   = prefix + '-' + sz;
+        const art          = artItems[primarySku];
         const transitAvail = (transitItems[primarySku] || {}).available || 0;
         const mainAvail    = (mainItems[primarySku]    || {}).available || 0;
-        const fbmMinQty    = art5 ? (art5.minQty || 0) : 0;
+        const fbmMinQty    = art ? (art.minQty || 0) : 0;
         const fbmOverstock = Math.max(0, mainAvail - fbmMinQty);
-        const recommendation = fbaItem.recommendedReorder || 0;
+        // Höherer Wert aus Sellerboards eigener Empfehlung und Amazons
+        // offiziellem Ship-In-Vorschlag — beide sind gültige Signale.
+        const recommendation = Math.max(fbaItem.recommendedReorder || 0, fbaItem.recommendedShipIn || 0);
         const trData       = inTransit[fbaSku] || { shipped: 0, received: 0 };
         const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
         const atFba        = (fbaItem.fbaStock || 0) + (fbaItem.fbaReserved || 0);
@@ -2138,9 +2142,10 @@ app.get('/api/wochenplanung', async (req, res) => {
         const sendNow      = Math.min(transitAvail, effRec);
         const stillMissing = Math.max(0, effRec - sendNow);
 
-        totalFbaKg = newProd * (art5 ? (art5.weightKg || 1) : 1);
+        totalFbaKg += newProd * (art ? (art.weightKg || 1) : 1);
 
-        fbaResult = {
+        fbaResults.push({
+          size:           sz,
           skuFba:         fbaSku,
           skuBase:        primarySku,
           fbaStock:       fbaItem.fbaStock || 0,
@@ -2150,6 +2155,8 @@ app.get('/api/wochenplanung', async (req, res) => {
           transitAvail,
           enRoute,
           atFba,
+          recommendedReorder: fbaItem.recommendedReorder || 0,
+          recommendedShipIn:  fbaItem.recommendedShipIn || 0,
           recommendation,
           effRec,
           shortfall,
@@ -2157,8 +2164,12 @@ app.get('/api/wochenplanung', async (req, res) => {
           stillMissing,
           fromFbm,
           newProd,
-        };
+        });
       }
+
+      // Primärer Eintrag für familienweite Ansichten (Reichweiten-Übersicht etc.):
+      // bevorzugt die 1kg-Variante (-5), sonst die erste gefundene Größe.
+      const fbaResult = fbaResults.find(f => f.size === '5') || fbaResults[0] || null;
 
       // Einkauf — offene Bestellungen (Verschickt) abziehen
       const totalProdKg  = totalFbmKg + totalFbaKg;
@@ -2179,6 +2190,7 @@ app.get('/api/wochenplanung', async (req, res) => {
         poolKg:      +poolKg.toFixed(1),
         fbmProduction,
         fba:         fbaResult,
+        fbaAll:      fbaResults,
         einkauf: {
           totalFbmKg:   +totalFbmKg.toFixed(1),
           totalFbaKg:   +totalFbaKg.toFixed(1),
@@ -2196,8 +2208,8 @@ app.get('/api/wochenplanung', async (req, res) => {
 
     // Sortierung: FBA zu senden zuerst, dann Einkaufsbedarf, dann FBM Produktion
     families.sort((a, b) => {
-      const aFbaSend = a.fba && a.fba.sendNow > 0 ? 1 : 0;
-      const bFbaSend = b.fba && b.fba.sendNow > 0 ? 1 : 0;
+      const aFbaSend = a.fbaAll.some(f => f.sendNow > 0) ? 1 : 0;
+      const bFbaSend = b.fbaAll.some(f => f.sendNow > 0) ? 1 : 0;
       if (bFbaSend !== aFbaSend) return bFbaSend - aFbaSend;
       if (b.einkauf.buySacks !== a.einkauf.buySacks) return b.einkauf.buySacks - a.einkauf.buySacks;
       const aTotalProd = a.fbmProduction.reduce((s, p) => s + p.prodNeed, 0);
@@ -2207,8 +2219,8 @@ app.get('/api/wochenplanung', async (req, res) => {
 
     // Summary
     const summary = {
-      zuVersenden:       families.reduce((s, f) => s + (f.fba ? f.fba.sendNow : 0), 0),
-      zuProduzierenFba:  families.reduce((s, f) => s + (f.fba ? f.fba.newProd : 0), 0),
+      zuVersenden:       families.reduce((s, f) => s + f.fbaAll.reduce((ss, x) => ss + x.sendNow, 0), 0),
+      zuProduzierenFba:  families.reduce((s, f) => s + f.fbaAll.reduce((ss, x) => ss + x.newProd, 0), 0),
       zuProduzierenFbm:  families.reduce((s, f) => f.fbmProduction.reduce((ss, p) => ss + p.prodNeed, 0) + s, 0),
       zuEinkaufenKg:     +families.reduce((s, f) => s + f.einkauf.buyKg, 0).toFixed(1),
       zuEinkaufenSaecke: families.reduce((s, f) => s + f.einkauf.buySacks, 0),
@@ -2218,7 +2230,7 @@ app.get('/api/wochenplanung', async (req, res) => {
       familienMitBedarf: families.filter(f =>
         f.einkauf.buySacks > 0 ||
         f.fbmProduction.some(p => p.prodNeed > 0) ||
-        (f.fba && (f.fba.sendNow > 0 || f.fba.newProd > 0))
+        f.fbaAll.some(x => x.sendNow > 0 || x.newProd > 0)
       ).length,
     };
 

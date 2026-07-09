@@ -1741,18 +1741,22 @@ function renderWochenplanung(d) {
       </div>
     </div>`;
 
+  // Alle FBA-Einträge über alle Familien UND alle Gebindegrößen (-1 bis -5) flach ausrollen
+  const fbaEntries = d.families.flatMap(f => (f.fbaAll || []).map(fba => ({ f, fba })));
+
   // ── Sektion 1: Versenden an Amazon ────────────────────────────────────────
-  const fbaVersenden = d.families.filter(f => f.fba && f.fba.recommendation > 0);
+  const fbaVersenden = fbaEntries.filter(e => e.fba.recommendation > 0);
   let section1 = '';
   if (fbaVersenden.length) {
-    const rows = fbaVersenden.map(f => {
-      const fba = f.fba;
+    const rows = fbaVersenden.map(({ f, fba }) => {
       const sendColor    = fba.sendNow > 0 ? 'color:var(--success);font-weight:700' : 'color:var(--muted)';
       const missingColor = fba.stillMissing > 0 ? 'color:var(--warn);font-weight:700' : 'color:var(--muted)';
       const newProdColor = fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
       const daysColor    = fba.fbaDaysLeft < 21 ? 'color:var(--danger)' : fba.fbaDaysLeft < 42 ? 'color:var(--warn)' : 'color:var(--success)';
+      const srcTag = fba.recommendedShipIn > fba.recommendedReorder
+        ? '<div style="font-size:0.68rem;color:var(--muted)">Amazon-Vorschlag</div>' : '';
       return `<tr>
-        <td><strong>${f.familyKey}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div>${srcTag}</td>
         <td style="text-align:right">${fmt(fba.fbaStock)}${fba.fbaReserved > 0 ? '<div style="font-size:0.73rem;color:var(--muted)">+' + fmt(fba.fbaReserved) + ' reserv.</div>' : ''}</td>
         <td style="text-align:right;${daysColor}">${fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : '—'}</td>
         <td style="text-align:right">${fmt(fba.transitAvail)}</td>
@@ -1766,7 +1770,7 @@ function renderWochenplanung(d) {
       <div class="wp-section-header">
         <span style="font-size:1.1rem">✈️</span>
         <h3>1. Versenden an Amazon (Transit → FBA)</h3>
-        <span class="wp-badge">${fbaVersenden.length} Familie${fbaVersenden.length !== 1 ? 'n' : ''}</span>
+        <span class="wp-badge">${fbaVersenden.length} Produkt${fbaVersenden.length !== 1 ? 'e' : ''}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -1784,26 +1788,15 @@ function renderWochenplanung(d) {
   }
 
   // ── Sektion 2: Produzieren für FBA Transit ─────────────────────────────────
-  const fbaProd = d.families.filter(f => f.fba && (f.fba.newProd > 0 || f.fba.fromFbm > 0));
+  const fbaProd = fbaEntries.filter(e => e.fba.newProd > 0 || e.fba.fromFbm > 0);
   let section2 = '';
   if (fbaProd.length) {
-    const art5Items = {};
-    d.families.forEach(f => {
-      if (f.fba) {
-        const art = { abfuellklasse: '' };
-        // abfuellklasse aus fbmProduction -5 holen falls vorhanden
-        const p5 = f.fbmProduction.find(p => p.sku === f.fba.skuBase);
-        if (p5) art.abfuellklasse = p5.abfuellklasse;
-        art5Items[f.familyKey] = art;
-      }
-    });
-    const rows = fbaProd.map(f => {
-      const fba  = f.fba;
+    const rows = fbaProd.map(({ f, fba }) => {
       const p5   = f.fbmProduction.find(p => p.sku === fba.skuBase);
       const kl   = p5 ? p5.abfuellklasse : '—';
       const lotSz = p5 ? p5.lotSize : '—';
       return `<tr>
-        <td><strong>${fba.skuBase || f.familyKey+'-5'}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
         <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
         <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
