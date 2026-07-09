@@ -1682,6 +1682,11 @@ const FBA_PROD_DAYS   = 7;
 const FBA_AMAZON_DAYS = 14;
 const FBA_LEAD_TOTAL  = FBA_PROD_DAYS + FBA_AMAZON_DAYS;
 
+// Fallback-Mindestbestand für FBM/Shopify, falls in MRPeasy kein minQty gepflegt
+// ist — verhindert, dass der komplette Main-Lagerbestand als "FBA-Überbestand"
+// gilt und leergeräumt wird, nur weil niemand einen Mindestbestand eingetragen hat.
+const FBM_MIN_FALLBACK_WEEKS = 2;
+
 app.get('/api/fba-planung', (req, res) => {
   try {
     const cfg       = loadConfig();
@@ -2127,6 +2132,7 @@ app.get('/api/wochenplanung', async (req, res) => {
           lotSize,
           prodNeed,
           reichweiteWochen,
+          fuellrateProStunde: art.fuellrateProStunde || 0,
         });
       }
 
@@ -2148,7 +2154,13 @@ app.get('/api/wochenplanung', async (req, res) => {
         const art          = artItems[primarySku];
         const transitAvail = (transitItems[primarySku] || {}).available || 0;
         const mainAvail    = (mainItems[primarySku]    || {}).available || 0;
-        const fbmMinQty    = art ? (art.minQty || 0) : 0;
+        // Kein gepflegter Mindestbestand in MRPeasy (minQty=0)? Dann NICHT den
+        // kompletten Main-Bestand als "Überbestand" für FBA freigeben — das würde
+        // den FBM/Shopify-Sicherheitspuffer leerräumen. Stattdessen Fallback:
+        // FBM_MIN_FALLBACK_WEEKS Wochen eigener FBM-Verkaufsrate als Mindestreserve.
+        const fbmProd5     = fbmProduction.find(p => p.sku === primarySku);
+        const fbmFallbackMin = fbmProd5 ? fbmProd5.velocityPW * FBM_MIN_FALLBACK_WEEKS : 0;
+        const fbmMinQty    = art && art.minQty > 0 ? art.minQty : fbmFallbackMin;
         const fbmOverstock = Math.max(0, mainAvail - fbmMinQty);
         // Höherer Wert aus Sellerboards eigener Empfehlung und Amazons
         // offiziellem Ship-In-Vorschlag — beide sind gültige Signale.
@@ -2193,6 +2205,8 @@ app.get('/api/wochenplanung', async (req, res) => {
           sendNow,
           stillMissing,
           fromFbm,
+          fbmMinQty:    +fbmMinQty.toFixed(1),
+          fbmMinSource: art && art.minQty > 0 ? 'mrpeasy' : 'fallback',
           newProd,
         });
       }

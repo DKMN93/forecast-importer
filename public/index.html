@@ -1807,7 +1807,7 @@ function renderWochenplanung(d) {
         <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
         <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
         <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
-        <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}</td>
+        <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}${fba.fromFbm > 0 && fba.fbmMinSource === 'fallback' ? `<div style="font-size:0.65rem;color:var(--warn)">⚠ kein MRPeasy-Mindestbestand — Schätzwert (${fmt(fba.fbmMinQty)} Stk. Puffer)</div>` : ''}</td>
         <td style="text-align:right;${fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)'}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : '—'}</td>
         <td style="text-align:right">${lotSz}</td>
         <td style="text-align:center"><span class="badge badge-muted">${kl || '—'}</span></td>
@@ -1857,9 +1857,18 @@ function renderWochenplanung(d) {
     });
 
     let tableRows = '';
+    let totalStunden = 0;
     for (const [kl, items] of Object.entries(byKlasse).sort(([a],[b]) => a.localeCompare(b))) {
+      const klasseTotal = items.reduce((s, p) => s + p.prodNeed, 0);
+      const fuellrate    = items.find(p => p.fuellrateProStunde > 0)?.fuellrateProStunde || 0;
+      const stunden      = fuellrate > 0 ? klasseTotal / fuellrate : null;
+      if (stunden !== null) totalStunden += stunden;
+      const stdLabel = stunden !== null
+        ? `${stunden.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} Std. (${fuellrate} Stk./h)`
+        : 'Füllrate n.v.';
       tableRows += `<tr style="background:var(--surface2)">
-        <td colspan="8" style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);padding:8px 16px">Abfüllklasse ${kl}</td>
+        <td colspan="7" style="font-size:0.72rem;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);padding:8px 16px">Abfüllklasse ${kl}</td>
+        <td style="text-align:right;font-size:0.72rem;font-weight:700;color:var(--muted);padding:8px 16px">${stdLabel}</td>
       </tr>`;
       items.forEach(p => {
         const rwColor = p.reichweiteWochen === null ? 'color:var(--muted)'
@@ -1885,6 +1894,7 @@ function renderWochenplanung(d) {
         <span style="font-size:1.1rem">📦</span>
         <h3>3. Produzieren für FBM (MAIN Lager)</h3>
         <span class="wp-badge">${fbmLines.length} SKU${fbmLines.length !== 1 ? 's' : ''}</span>
+        ${totalStunden > 0 ? `<span class="wp-badge" style="background:rgba(46,90,125,0.3)">≈ ${totalStunden.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} Std. Füllzeit gesamt</span>` : ''}
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
