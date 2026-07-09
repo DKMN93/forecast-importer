@@ -2163,6 +2163,13 @@ app.get('/api/wochenplanung', async (req, res) => {
         const sendNow      = Math.min(transitAvail, effRec);
         const stillMissing = Math.max(0, effRec - sendNow);
 
+        // Transit-Pipeline-Reichweite: wie viele Tage hält der bereits fertig
+        // abgepackte Transit-Bestand bei aktueller Amazon-Verkaufsgeschwindigkeit?
+        // Unter transitTargetDays ("Mindest-Pipeline zu Amazon") wird's dringend.
+        const velocityPD        = fbaItem.velocity || 0;
+        const transitReichweiteTage = velocityPD > 0 ? +(transitAvail / velocityPD).toFixed(1) : null;
+        const transitUrgent     = newProd > 0 && transitReichweiteTage !== null && transitReichweiteTage < transitTargetDays;
+
         totalFbaKg += newProd * (art ? (art.weightKg || 1) : 1);
 
         fbaResults.push({
@@ -2174,6 +2181,8 @@ app.get('/api/wochenplanung', async (req, res) => {
           fbaDaysLeft:    fbaItem.daysLeft || 0,
           fbaVelocity:    fbaItem.velocity || 0,
           transitAvail,
+          transitReichweiteTage,
+          transitUrgent,
           enRoute,
           atFba,
           recommendedReorder: fbaItem.recommendedReorder || 0,
@@ -2201,6 +2210,14 @@ app.get('/api/wochenplanung', async (req, res) => {
       const buySacks     = buyKg       > 0 ? Math.ceil(buyKg       / sackKg) : 0;
       const stillBuySacks = stillToBuyKg > 0 ? Math.ceil(stillToBuyKg / sackKg) : 0;
 
+      // Rohware-Reichweite: wie viele Tage hält der aktuelle Pool bei der
+      // Ø-Verbrauchsrate aus dem Forecast-Zeitraum? Unter rohwareTargetDays
+      // (Lead Time + Slotting + Produktion + Puffer) ist Nachbestellen dringend —
+      // unabhängig davon, wie groß der Gesamtbedarf über den vollen Zeitraum ist.
+      const avgKgPerDay = days > 0 ? totalProdKg / days : 0;
+      const rohwareReichweiteTage = avgKgPerDay > 0 ? +(poolKg / avgKgPerDay).toFixed(1) : null;
+      const rohwareUrgent = stillBuySacks > 0 && rohwareReichweiteTage !== null && rohwareReichweiteTage < rohwareTargetDays;
+
       families.push({
         familyKey:   prefix,
         rohwareNr:   rohInfo.rohwareNr,
@@ -2224,15 +2241,28 @@ app.get('/api/wochenplanung', async (req, res) => {
           hasOverdue:   poEntry ? poEntry.hasOverdue : false,
           stillToBuyKg: +stillToBuyKg.toFixed(1),
           stillBuySacks,
+          rohwareReichweiteTage,
+          rohwareUrgent,
         },
       });
     }
 
-    // Sortierung: FBA zu senden zuerst, dann Einkaufsbedarf, dann FBM Produktion
+    // Sortierung: 1) FBA zu senden (sofort möglich), 2) unter Familien mit
+    // Kaufbedarf die kürzeste Rohware-Reichweite zuerst (dringendste zuerst,
+    // nicht die größte Menge), 3) Menge als Tie-Breaker, 4) FBM-Produktion.
     families.sort((a, b) => {
       const aFbaSend = a.fbaAll.some(f => f.sendNow > 0) ? 1 : 0;
       const bFbaSend = b.fbaAll.some(f => f.sendNow > 0) ? 1 : 0;
       if (bFbaSend !== aFbaSend) return bFbaSend - aFbaSend;
+
+      const aHasNeed = a.einkauf.stillBuySacks > 0;
+      const bHasNeed = b.einkauf.stillBuySacks > 0;
+      if (aHasNeed || bHasNeed) {
+        const aRw = aHasNeed ? (a.einkauf.rohwareReichweiteTage ?? Infinity) : Infinity;
+        const bRw = bHasNeed ? (b.einkauf.rohwareReichweiteTage ?? Infinity) : Infinity;
+        if (aRw !== bRw) return aRw - bRw;
+      }
+
       if (b.einkauf.buySacks !== a.einkauf.buySacks) return b.einkauf.buySacks - a.einkauf.buySacks;
       const aTotalProd = a.fbmProduction.reduce((s, p) => s + p.prodNeed, 0);
       const bTotalProd = b.fbmProduction.reduce((s, p) => s + p.prodNeed, 0);
@@ -2255,6 +2285,8 @@ app.get('/api/wochenplanung', async (req, res) => {
         f.fbaAll.some(x => x.sendNow > 0 || x.newProd > 0)
       ).length,
       ueberfaelligeBestellungen: families.filter(f => f.einkauf.hasOverdue).length,
+      rohwareDringend:   families.filter(f => f.einkauf.rohwareUrgent).length,
+      transitDringend:   families.reduce((s, f) => s + f.fbaAll.filter(x => x.transitUrgent).length, 0),
     };
 
     res.json({

@@ -1788,15 +1788,22 @@ function renderWochenplanung(d) {
   }
 
   // ── Sektion 2: Produzieren für FBA Transit ─────────────────────────────────
-  const fbaProd = fbaEntries.filter(e => e.fba.newProd > 0 || e.fba.fromFbm > 0);
+  // Dringlichkeit zuerst: kürzeste Transit-Pipeline-Reichweite (Tage bei aktueller
+  // Amazon-Verkaufsgeschwindigkeit) statt reiner Familien-Reihenfolge.
+  const fbaProd = fbaEntries
+    .filter(e => e.fba.newProd > 0 || e.fba.fromFbm > 0)
+    .sort((a, b) => (a.fba.transitReichweiteTage ?? Infinity) - (b.fba.transitReichweiteTage ?? Infinity));
   let section2 = '';
   if (fbaProd.length) {
     const rows = fbaProd.map(({ f, fba }) => {
       const p5   = f.fbmProduction.find(p => p.sku === fba.skuBase);
       const kl   = p5 ? p5.abfuellklasse : '—';
       const lotSz = p5 ? p5.lotSize : '—';
+      const rwLabel = fba.transitReichweiteTage !== null ? fba.transitReichweiteTage + ' Tage' : '—';
+      const rwColor = fba.transitUrgent ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
       return `<tr>
-        <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td><strong>${fba.skuBase}</strong>${fba.transitUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td style="text-align:right;${rwColor}">${rwLabel}</td>
         <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
         <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
         <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
@@ -1812,10 +1819,12 @@ function renderWochenplanung(d) {
         <span style="font-size:1.1rem">🏭</span>
         <h3>2. Produzieren für FBA Transit</h3>
         <span class="wp-badge">${fbaProd.length} Produkt${fbaProd.length !== 1 ? 'e' : ''}</span>
+        ${d.summary.transitDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.transitDringend} unter Pipeline-Min</span>` : ''}
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
+          <th style="text-align:right">Transit-Reichweite</th>
           <th style="text-align:right">Noch benötigt (netto)</th>
           <th style="text-align:right">Transit bereit</th>
           <th style="text-align:right">Fehlmenge</th>
@@ -1919,16 +1928,19 @@ function renderWochenplanung(d) {
         : label;
     };
 
-    // Tabelle: Offen — Handlungsbedarf
+    // Tabelle: Offen — Handlungsbedarf (bereits nach Dringlichkeit sortiert vom Server)
     const offenRows = kaufenFam.map(f => {
       const e = f.einkauf;
       const poInfo = e.incomingOrders?.length
         ? e.incomingOrders.map(orderLine).join('<br>')
         : '—';
+      const rwColor = e.rohwareUrgent ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
+      const rwLabel = e.rohwareReichweiteTage !== null ? e.rohwareReichweiteTage + ' Tage' : '—';
       return `<tr>
-        <td><strong>${f.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td><strong>${f.rohwareNr}</strong>${e.rohwareUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="font-size:0.82rem">${f.familyKey}</td>
         <td style="text-align:right">${fmt(f.sack9Stock)} Säcke / ${fmtKg(f.poolKg)} KG</td>
+        <td style="text-align:right;${rwColor}">${rwLabel}</td>
         <td style="text-align:right">${fmtKg(e.totalProdKg)} KG</td>
         <td style="text-align:right">${e.incomingKg > 0
           ? `<span style="color:var(--success)">${fmtKg(e.incomingKg)} KG</span><div style="font-size:0.7rem;color:var(--muted)">${poInfo}</div>`
@@ -1961,11 +1973,13 @@ function renderWochenplanung(d) {
           ? `<span class="wp-badge">${kaufenFam.length} offen</span>`
           : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Alles gedeckt</span>`}
         ${overdueOrders.length ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${overdueOrders.length} überfällig</span>` : ''}
+        ${d.summary.rohwareDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.rohwareDringend} unter Ziel-Reichweite</span>` : ''}
       </div>
       ${kaufenFam.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>
           <th>Rohware (AXY)</th><th>Familie</th>
           <th style="text-align:right">-9 Pool</th>
+          <th style="text-align:right">Reichweite</th>
           <th style="text-align:right">Produktionsbedarf</th>
           <th style="text-align:right">Im Zulauf</th>
           <th style="text-align:right">Noch kaufen</th>
