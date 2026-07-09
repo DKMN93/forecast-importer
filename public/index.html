@@ -1907,15 +1907,23 @@ function renderWochenplanung(d) {
   // Nur Artikel mit offener Kaufaktion — gedeckte Artikel sind keine Aufgabe mehr
   const kaufenFam  = d.families.filter(f => f.einkauf.stillBuySacks > 0);
   const gedecktFam = d.families.filter(f => f.einkauf.stillBuySacks === 0 && f.einkauf.incomingKg > 0);
+  const statusLabel = s => s === 'Verschickt' ? 'unterwegs' : (s === 'Bestellt' || s === 'Neue Bestellung') ? 'bestellt' : s;
   let section4 = '';
   {
     const fmtKg = v => v != null ? v.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—';
+
+    const orderLine = o => {
+      const label = `${o.poNr}: ${o.menge} kg (${statusLabel(o.status)}${o.liefdat ? ', erw. ' + o.liefdat : ''})`;
+      return o.overdue
+        ? `<span style="color:var(--danger);font-weight:700">⚠ ${label} — überfällig</span>`
+        : label;
+    };
 
     // Tabelle: Offen — Handlungsbedarf
     const offenRows = kaufenFam.map(f => {
       const e = f.einkauf;
       const poInfo = e.incomingOrders?.length
-        ? e.incomingOrders.map(o => `${o.poNr}: ${o.menge} kg${o.liefdat ? ' (erw. ' + o.liefdat + ')' : ''}`).join('<br>')
+        ? e.incomingOrders.map(orderLine).join('<br>')
         : '—';
       return `<tr>
         <td><strong>${f.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
@@ -1935,6 +1943,15 @@ function renderWochenplanung(d) {
         ✓ Bereits gedeckt durch offene Bestellungen: ${gedecktFam.map(f => `<strong>${f.rohwareNr}</strong> (${fmtKg(f.einkauf.incomingKg)} KG im Zulauf)`).join(' · ')}
       </div>` : '';
 
+    // Warnbanner: überfällige Bestellungen über ALLE Familien (auch bereits "gedeckte")
+    const overdueOrders = d.families.flatMap(f =>
+      (f.einkauf.incomingOrders || []).filter(o => o.overdue).map(o => ({ f, o })));
+    const overdueBanner = overdueOrders.length ? `
+      <div style="padding:10px 20px;font-size:0.78rem;color:var(--danger);border-top:1px solid var(--border);background:rgba(200,60,60,0.08)">
+        ⚠ <strong>${overdueOrders.length} überfällige Bestellung${overdueOrders.length !== 1 ? 'en' : ''}</strong> — Lieferant nachfassen:
+        ${overdueOrders.map(({ f, o }) => `<strong>${f.rohwareNr}</strong> ${o.poNr} (${o.menge} kg, erw. ${o.liefdat})`).join(' · ')}
+      </div>` : '';
+
     section4 = `
     <div class="wp-section">
       <div class="wp-section-header">
@@ -1943,6 +1960,7 @@ function renderWochenplanung(d) {
         ${kaufenFam.length > 0
           ? `<span class="wp-badge">${kaufenFam.length} offen</span>`
           : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Alles gedeckt</span>`}
+        ${overdueOrders.length ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${overdueOrders.length} überfällig</span>` : ''}
       </div>
       ${kaufenFam.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>
@@ -1955,6 +1973,7 @@ function renderWochenplanung(d) {
         <tbody>${offenRows}</tbody>
       </table></div>` : '<div class="wp-empty">Kein Einkaufsbedarf — alle Rohwaren durch Pool oder offene Bestellungen gedeckt.</div>'}
       ${gedecktInfo}
+      ${overdueBanner}
     </div>`;
   }
 

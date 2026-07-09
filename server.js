@@ -1592,8 +1592,20 @@ app.post('/api/upload-sellerboard-shipments', upload.single('file'), (req, res) 
 
 // ─── Bestellungen (Purchase Orders) Upload ───────────────────────────────────
 // Importiert offene Einkaufsbestellungen aus MRPeasy CSV.
-// Relevante Zeilen: Status (erste Spalte) = "Verschickt" → im Zulauf.
-// Menge = kg (ERP speichert Rohware in kg).
+// Relevante Zeilen: Status (erste Spalte) = "Bestellt", "Neue Bestellung" oder
+// "Verschickt" → alles was noch nicht angekommen ist, zählt als im Zulauf.
+// "Empfangen" (bereits im Lager, siehe stock_lots) und alle unbekannten
+// Stati werden ignoriert. Menge = kg (ERP speichert Rohware in kg).
+
+const OFFENE_PO_STATI = new Set(['Bestellt', 'Neue Bestellung', 'Verschickt']);
+
+// Erw. Lieferdatum als "DD.MM.YYYY" — Parsing für Überfälligkeits-Check
+function parseDeDate(s) {
+  const m = /^(\d{1,2})\.(\d{1,2})\.(\d{4})/.exec((s || '').trim());
+  if (!m) return null;
+  const d = new Date(+m[3], +m[2] - 1, +m[1]);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
   try {
@@ -1620,29 +1632,36 @@ app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
 
     if (iSku === -1 || iMenge === -1) return res.status(400).json({ error: 'Unbekanntes Format' });
 
-    const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
-    const incoming = {}; // axyNr → { sku, name, totalKg, lieferant, lines[] }
+    const pf  = v => parseFloat((v || '0').replace(',', '.')) || 0;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const incoming = {}; // axyNr → { sku, name, totalKg, lieferant, orders[] }
 
     for (let i = 1; i < lines.length; i++) {
       const cols   = parseRow(lines[i]);
       const status = iStatus >= 0 ? cols[iStatus] : '';
-      // Nur "Verschickt" = unterwegs, noch nicht angekommen
-      if (status !== 'Verschickt') continue;
+      if (!OFFENE_PO_STATI.has(status)) continue;
 
       const sku   = cols[iSku];
       const menge = pf(cols[iMenge]); // kg
       if (!sku || menge <= 0) continue;
 
+      const liefdat  = iLiefdat >= 0 ? cols[iLiefdat] : '';
+      const liefDate = parseDeDate(liefdat);
+      const overdue  = liefDate !== null && liefDate < today;
+
       if (!incoming[sku]) incoming[sku] = {
         sku, name: cols[iName] || '',
         lieferant: iLieferant >= 0 ? cols[iLieferant] : '',
-        totalKg: 0, orders: [],
+        totalKg: 0, orders: [], hasOverdue: false,
       };
       incoming[sku].totalKg += menge;
+      if (overdue) incoming[sku].hasOverdue = true;
       incoming[sku].orders.push({
-        poNr:    cols[iNr]      || '',
+        poNr:    cols[iNr] || '',
         menge,
-        liefdat: iLiefdat >= 0 ? cols[iLiefdat] : '',
+        status,
+        liefdat,
+        overdue,
       });
     }
 
@@ -1706,7 +1725,9 @@ app.get('/api/fba-planung', (req, res) => {
       const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
 
       // Was noch aus MAIN vorbereitet + versendet werden muss
-      const recommendation   = fba.recommendedReorder || 0;
+      // Höherer Wert aus Sellerboards eigener Empfehlung und Amazons offiziellem
+      // Ship-In-Vorschlag — siehe gleicher Fix in /api/wochenplanung.
+      const recommendation   = Math.max(fba.recommendedReorder || 0, fba.recommendedShipIn || 0);
       const nochZuSenden     = Math.max(0, recommendation - enRoute - transitStock);
 
       // Aus FBM-Überbestand entnehmen?
@@ -2171,7 +2192,7 @@ app.get('/api/wochenplanung', async (req, res) => {
       // bevorzugt die 1kg-Variante (-5), sonst die erste gefundene Größe.
       const fbaResult = fbaResults.find(f => f.size === '5') || fbaResults[0] || null;
 
-      // Einkauf — offene Bestellungen (Verschickt) abziehen
+      // Einkauf — offene Bestellungen (Bestellt/Neue Bestellung/Verschickt) abziehen
       const totalProdKg  = totalFbmKg + totalFbaKg;
       const poEntry      = poIncoming[rohInfo.rohwareNr] || null;
       const incomingKg   = poEntry ? poEntry.totalKg : 0;
@@ -2200,6 +2221,7 @@ app.get('/api/wochenplanung', async (req, res) => {
           buySacks,
           incomingKg:   +incomingKg.toFixed(1),
           incomingOrders: poEntry ? poEntry.orders : [],
+          hasOverdue:   poEntry ? poEntry.hasOverdue : false,
           stillToBuyKg: +stillToBuyKg.toFixed(1),
           stillBuySacks,
         },
@@ -2232,6 +2254,7 @@ app.get('/api/wochenplanung', async (req, res) => {
         f.fbmProduction.some(p => p.prodNeed > 0) ||
         f.fbaAll.some(x => x.sendNow > 0 || x.newProd > 0)
       ).length,
+      ueberfaelligeBestellungen: families.filter(f => f.einkauf.hasOverdue).length,
     };
 
     res.json({
