@@ -29,6 +29,13 @@ app.use(helmet({ contentSecurityPolicy: false }));
 const APP_PASSWORD = process.env.APP_PASSWORD;
 const APP_USERNAME = process.env.APP_USERNAME || 'admin';
 
+// In Produktion (z.B. Railway) darf die App nie ohne Passwort laufen —
+// sonst sind Business-Daten und der Shopify-OAuth-Flow offen im Netz erreichbar.
+if (process.env.NODE_ENV === 'production' && !APP_PASSWORD) {
+  console.error('✗ APP_PASSWORD ist in Produktion nicht gesetzt. Server wird nicht gestartet.');
+  process.exit(1);
+}
+
 function requireAuth(req, res, next) {
   if (!APP_PASSWORD) return next(); // Kein Passwort gesetzt → lokal ohne Auth
   const auth = req.headers['authorization'];
@@ -122,6 +129,13 @@ app.get('/auth/callback', async (req, res) => {
   pendingOAuthStates.delete(state);
 
   const cfg = loadConfig();
+
+  // shop muss exakt der konfigurierte Shop sein (verhindert SSRF: sonst könnte
+  // ein Angreifer client_id/client_secret an eine beliebige Domain schicken lassen)
+  if (!/^[a-z0-9-]+\.myshopify\.com$/i.test(shop) || shop !== cfg.shopifyDomain) {
+    return res.redirect('/?error=OAuth+Sicherheitsfehler:+Ungültiger+Shop');
+  }
+
   try {
     const tokenRes = await fetch(`https://${shop}/admin/oauth/access_token`, {
       method: 'POST',
