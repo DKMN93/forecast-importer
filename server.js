@@ -2053,10 +2053,9 @@ app.get('/api/lagerbestand', async (req, res) => {
 //   4. Was einkaufen (Rohware)?
 //   5. Reichweiten-Übersicht
 
-app.get('/api/wochenplanung', async (req, res) => {
-  try {
+async function buildWochenplanungData(reqDays) {
     const cfg               = loadConfig();
-    const days              = parseInt(req.query.days) || cfg.forecastDays || 90;
+    const days              = reqDays || cfg.forecastDays || 90;
     const weeks             = days / 7;
     const fbmTargetDays     = cfg.fbmTargetDays     || 30;
     const rohwareTargetDays = cfg.rohwareTargetDays || 28;
@@ -2211,6 +2210,7 @@ app.get('/api/wochenplanung', async (req, res) => {
           transitUrgent,
           enRoute,
           atFba,
+          mainAvail,
           recommendedReorder: fbaItem.recommendedReorder || 0,
           recommendedShipIn:  fbaItem.recommendedShipIn || 0,
           recommendation,
@@ -2317,7 +2317,7 @@ app.get('/api/wochenplanung', async (req, res) => {
       transitDringend:   families.reduce((s, f) => s + f.fbaAll.filter(x => x.transitUrgent).length, 0),
     };
 
-    res.json({
+    return {
       period:    { days, weeks: +weeks.toFixed(2), targetWeeks: +targetWeeks.toFixed(2) },
       updatedAt: {
         articles: artData.updatedAt || null,
@@ -2326,7 +2326,104 @@ app.get('/api/wochenplanung', async (req, res) => {
       },
       families,
       summary,
-    });
+    };
+}
+
+app.get('/api/wochenplanung', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || null;
+    const data = await buildWochenplanungData(days);
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Wochenplanung Export (Excel, ein Tab je Department) ─────────────────────
+app.get('/api/export/wochenplanung', async (req, res) => {
+  try {
+    const days     = parseInt(req.query.days) || null;
+    const data     = await buildWochenplanungData(days);
+    const dateStr  = new Date().toISOString().slice(0, 10);
+    const dringend = urgent => urgent ? '⚠ DRINGEND' : '';
+
+    const wb = xlsx.utils.book_new();
+    const addSheet = (name, headers, rows, colWidths) => {
+      const ws = xlsx.utils.aoa_to_sheet([headers, ...rows]);
+      if (colWidths) ws['!cols'] = colWidths.map(wch => ({ wch }));
+      xlsx.utils.book_append_sheet(wb, ws, name);
+    };
+
+    // ── Tab 1: Einkaufen (Rohware) ──
+    const einkaufRows = data.families
+      .filter(f => f.einkauf.stillBuySacks > 0)
+      .map(f => [
+        f.rohwareNr, f.rohwareName, f.familyKey,
+        f.einkauf.stillBuySacks, f.einkauf.stillToBuyKg,
+        f.einkauf.rohwareReichweiteTage ?? '',
+        dringend(f.einkauf.rohwareUrgent),
+      ]);
+    addSheet('Einkaufen', [
+      'Rohware-Nr.', 'Rohware', 'Familie', 'Noch kaufen (Säcke)', 'Noch kaufen (KG)',
+      'Reichweite (Tage)', 'Dringlichkeit',
+    ], einkaufRows, [14, 40, 16, 18, 18, 16, 14]);
+
+    // ── Tab 2: Versenden an Amazon (Transit → FBA) ──
+    const versendenRows = data.families.flatMap(f => f.fbaAll
+      .filter(x => x.sendNow > 0)
+      .map(x => [x.skuBase, f.rohwareName, x.sendNow, x.transitAvail, x.stillMissing, '']));
+    addSheet('Versenden', [
+      'SKU', 'Produkt', 'Jetzt senden (Stk.)', 'Transit bereit (Stk.)', 'Fehlmenge (Stk.)', 'Dringlichkeit',
+    ], versendenRows, [16, 36, 18, 18, 16, 14]);
+
+    // ── Tab 3: Transfer aus MAIN-Lager (→ Transitlager) ──
+    const transferRows = data.families.flatMap(f => f.fbaAll
+      .filter(x => x.fromFbm > 0)
+      .map(x => [x.skuBase, f.rohwareName, x.mainAvail, x.fromFbm, x.fbmMinQty,
+        x.fbmMinSource === 'fallback' ? 'Schätzwert (kein MRPeasy-Mindestbestand)' : '']));
+    addSheet('Transfer', [
+      'SKU', 'Produkt', 'MAIN Bestand (Stk.)', 'Umpacken für FBA (Stk.)', 'FBM-Mindestbestand (bleibt)', 'Hinweis',
+    ], transferRows, [16, 36, 18, 20, 22, 32]);
+
+    // ── Tab 4: Produzieren für FBA-Transit ──
+    const produzierenFbaRows = data.families.flatMap(f => f.fbaAll
+      .filter(x => x.newProd > 0)
+      .map(x => {
+        const p5 = f.fbmProduction.find(p => p.sku === x.skuBase);
+        return [x.skuBase, f.rohwareName, x.newProd, p5 ? p5.lotSize : '', p5 ? p5.abfuellklasse : '',
+          x.transitReichweiteTage ?? '', dringend(x.transitUrgent)];
+      }));
+    addSheet('Produzieren FBA', [
+      'SKU', 'Produkt', 'Neu produzieren (Stk.)', 'Los-Größe', 'Abfüllklasse',
+      'Transit-Reichweite (Tage)', 'Dringlichkeit',
+    ], produzierenFbaRows, [16, 36, 18, 12, 14, 20, 14]);
+
+    // ── Tab 5: Produzieren für FBM (MAIN Lager) ──
+    const produzierenFbmRows = data.families.flatMap(f => f.fbmProduction
+      .filter(p => p.prodNeed > 0)
+      .map(p => [p.sku, p.name, p.abfuellklasse, p.prodNeed, p.lotSize, p.reichweiteWochen ?? '',
+        dringend(p.reichweiteWochen !== null && p.reichweiteWochen < data.period.targetWeeks * 0.5)]));
+    addSheet('Produzieren FBM', [
+      'SKU', 'Produkt', 'Abfüllklasse', 'Produzieren (Stk.)', 'Los-Größe',
+      'Reichweite (Wochen)', 'Dringlichkeit',
+    ], produzierenFbmRows, [16, 36, 12, 18, 12, 16, 14]);
+
+    // ── Info-Tab ──
+    addSheet('Info', ['Wochenplanung-Export', `Stand: ${dateStr}`], [
+      [],
+      ['Zeitraum', `${data.period.days} Tage Forecast-Basis`],
+      ['Artikel-Daten', data.updatedAt.articles || '—'],
+      ['MAIN-Lager', data.updatedAt.main || '—'],
+      ['FBA-Daten (Sellerboard)', data.updatedAt.fba || '—'],
+      [],
+      ['Hinweis', 'Jeder Tab ist eine eigenständige To-do-Liste für das jeweilige Department.'],
+    ], [24, 40]);
+
+    const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    res.setHeader('Content-Disposition', `attachment; filename="Wochenplanung_${dateStr}.xlsx"`);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.send(buf);
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });

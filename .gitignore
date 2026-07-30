@@ -6,10 +6,15 @@ config.json
 
 # Lokale Datendateien (werden zur Laufzeit generiert)
 stock.json
+stock-full.json
+stock-transit.json
 articles.json
 parts-mapping.json
 sku-targets.json
 update-log.json
+fba-stock.json
+fba-shipments.json
+purchase-orders.json
 
 # OS
 .DS_Store
