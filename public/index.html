@@ -2127,9 +2127,13 @@ function renderWochenplanung(d, buyback) {
         : c.mhdMonateRest < 6  ? 'color:var(--danger);font-weight:700'
         : c.mhdMonateRest < 12 ? 'color:var(--warn)'
         : 'color:var(--success)';
-      const lotLines = c.lots.map(l =>
-        `${l.sku} · Charge ${l.charge}: ${fmt(l.aufLager)} ${l.sku === c.sack9Sku ? 'Stk.' : 'kg'}${l.actMatchingId ? ' · ACT-Nr. ' + l.actMatchingId : ''}`
-      ).join('<br>');
+      const lotLines = c.lots.map(l => {
+        const unit    = l.sku === c.sack9Sku ? 'Stk.' : 'kg';
+        const gebucht = l.aufLager - l.verfuegbar;
+        return `${l.sku} · Charge ${l.charge}: ${fmt(l.verfuegbar)} ${unit} verfügbar`
+          + (gebucht > 0 ? ` (von ${fmt(l.aufLager)} ${unit}, ${fmt(gebucht)} ${unit} gebucht)` : '')
+          + (l.actMatchingId ? ' · ACT-Nr. ' + l.actMatchingId : '');
+      }).join('<br>');
       return `<tr>
         <td><strong>${c.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${c.rohwareName}</div></td>
         <td style="font-size:0.82rem">${c.familyKey}</td>

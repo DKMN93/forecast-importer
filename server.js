@@ -1842,7 +1842,10 @@ async function buildBuybackData(reqDays) {
     } else {
       relevantLots = [...actLotsFor(nr), ...actLotsFor(sack9Sku)];
       if (relevantLots.length === 0) continue;
-      actKg      = relevantLots.reduce((s, l) => s + l.aufLager * (l.sku === sack9Sku ? sackKg : 1), 0);
+      // Verfügbar (nicht "Auf Lager") — ein Teil der Charge kann bereits für
+      // einen laufenden Fertigungsauftrag reserviert ("Gebucht") sein und ist
+      // dann nicht frei rückgabefähig.
+      actKg      = relevantLots.reduce((s, l) => s + l.verfuegbar * (l.sku === sack9Sku ? sackKg : 1), 0);
       matchedVia = 'charge';
     }
 
@@ -1864,7 +1867,7 @@ async function buildBuybackData(reqDays) {
       earliestExpiry: earliestExpiry ? earliestExpiry.toISOString().slice(0, 10) : null,
       mhdMonateRest,
       lots: relevantLots.map(l => ({
-        sku: l.sku, charge: l.charge, aufLager: l.aufLager,
+        sku: l.sku, charge: l.charge, aufLager: l.aufLager, verfuegbar: l.verfuegbar,
         verfallsdatum: l.verfallsdatum, actMatchingId: l.actMatchingId,
         lieferant: l.lieferant,
       })),
