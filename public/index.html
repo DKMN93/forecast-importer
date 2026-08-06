@@ -550,6 +550,10 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Bestellungen hochladen (purchase_orders CSV aus MRPeasy)</div>
               <input type="file" accept=".csv" style="display:none" onchange="uploadPurchaseOrders(this)">
             </label>
+            <label>
+              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen mit MHD hochladen (stock_lots CSV — für Buyback Options)</div>
+              <input type="file" accept=".csv" style="display:none" onchange="uploadStockLots(this)">
+            </label>
           </div>
         </div>
       </div>
@@ -1706,15 +1710,18 @@ function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce
 async function loadWochenplanung() {
   document.getElementById('wochenContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Wochenplanung…</div>';
   try {
-    const data = await api('/wochenplanung?days=' + getPeriodDays());
-    renderWochenplanung(data);
+    const [data, buyback] = await Promise.all([
+      api('/wochenplanung?days=' + getPeriodDays()),
+      api('/buyback?days=' + getPeriodDays()).catch(() => null), // optional: Lot-Import evtl. noch nicht hochgeladen
+    ]);
+    renderWochenplanung(data, buyback);
     document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
   } catch (e) {
     document.getElementById('wochenContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
   }
 }
 
-function renderWochenplanung(d) {
+function renderWochenplanung(d, buyback) {
   const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
   const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : '—';
 
@@ -1978,6 +1985,10 @@ function renderWochenplanung(d) {
   // Nur Artikel mit offener Kaufaktion — gedeckte Artikel sind keine Aufgabe mehr
   const kaufenFam  = d.families.filter(f => f.einkauf.stillBuySacks > 0);
   const gedecktFam = d.families.filter(f => f.einkauf.stillBuySacks === 0 && f.einkauf.incomingKg > 0);
+  // Pool leer, aber (noch) kein errechneter Produktionsbedarf — kein Kaufvorschlag,
+  // aber ohne Puffer bei der nächsten Produktion. Nur zeigen, wenn nicht schon
+  // oben in kaufenFam gelistet (dort steht's ohnehin schon).
+  const poolLeerFam = d.families.filter(f => f.einkauf.poolEmpty && f.einkauf.stillBuySacks === 0);
   const statusLabel = s => s === 'Verschickt' ? 'unterwegs' : (s === 'Bestellt' || s === 'Neue Bestellung') ? 'bestellt' : s;
   let section4 = '';
   {
@@ -2001,9 +2012,9 @@ function renderWochenplanung(d) {
       return `<tr>
         <td><strong>${f.rohwareNr}</strong>${e.rohwareUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="font-size:0.82rem">${f.familyKey}</td>
-        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke / ${fmtKg(f.poolKg)} KG</td>
+        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmtKg(f.rawKg) + ' KG lose' : ''} / ${fmtKg(f.poolKg)} KG</td>
         <td style="text-align:right;${rwColor}">${rwLabel}</td>
-        <td style="text-align:right">${fmtKg(e.totalProdKg)} KG</td>
+        <td style="text-align:right">${fmtKg(e.totalProdKg)} KG${e.direct9Kg > 0 ? `<div style="font-size:0.7rem;color:var(--muted)">davon ${fmtKg(e.direct9Kg)} KG Direktverkauf ${f.sack9Sku}</div>` : ''}</td>
         <td style="text-align:right">${e.incomingKg > 0
           ? `<span style="color:var(--success)">${fmtKg(e.incomingKg)} KG</span><div style="font-size:0.7rem;color:var(--muted)">${poInfo}</div>`
           : '<span style="color:var(--muted)">—</span>'}</td>
@@ -2026,6 +2037,14 @@ function renderWochenplanung(d) {
         ${overdueOrders.map(({ f, o }) => `<strong>${f.rohwareNr}</strong> ${o.poNr} (${o.menge} kg, erw. ${o.liefdat})`).join(' · ')}
       </div>` : '';
 
+    // Warnbanner: Rohware-Pool leer, aber kein Kaufvorschlag (Downstream-Bestand
+    // deckt den Ziel-Zeitraum noch) — kein akuter Kauf, aber kein Puffer mehr.
+    const poolLeerBanner = poolLeerFam.length ? `
+      <div style="padding:10px 20px;font-size:0.78rem;color:var(--warn);border-top:1px solid var(--border);background:rgba(200,150,60,0.08)">
+        ⚠ <strong>${poolLeerFam.length} Rohware-Pool${poolLeerFam.length !== 1 ? 's' : ''} leer</strong> (kein akuter Kaufvorschlag, aber kein Puffer mehr — Downstream-Bestand deckt den Ziel-Zeitraum noch):
+        ${poolLeerFam.map(f => `<strong>${f.rohwareNr}</strong> ${f.familyKey}`).join(' · ')}
+      </div>` : '';
+
     section4 = `
     <div class="wp-section">
       <div class="wp-section-header">
@@ -2036,6 +2055,7 @@ function renderWochenplanung(d) {
           : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Alles gedeckt</span>`}
         ${overdueOrders.length ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${overdueOrders.length} überfällig</span>` : ''}
         ${d.summary.rohwareDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.rohwareDringend} unter Ziel-Reichweite</span>` : ''}
+        ${poolLeerFam.length > 0 ? `<span class="wp-badge" style="background:rgba(200,150,60,0.3)">⚠ ${poolLeerFam.length} Pool leer</span>` : ''}
       </div>
       ${kaufenFam.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>
@@ -2050,6 +2070,7 @@ function renderWochenplanung(d) {
       </table></div>` : '<div class="wp-empty">Kein Einkaufsbedarf — alle Rohwaren durch Pool oder offene Bestellungen gedeckt.</div>'}
       ${gedecktInfo}
       ${overdueBanner}
+      ${poolLeerBanner}
     </div>`;
   }
 
@@ -2068,7 +2089,7 @@ function renderWochenplanung(d) {
     const pool9Color = f.sack9Stock <= 1 ? 'color:var(--warn);font-weight:700' : '';
     return `<tr>
       <td><strong>${f.familyKey}</strong></td>
-      <td style="text-align:right;${pool9Color}">${fmt(f.sack9Stock)} Säcke / ${fmt(f.poolKg)} KG</td>
+      <td style="text-align:right;${pool9Color}">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmt(f.rawKg) + ' KG lose' : ''} / ${fmt(f.poolKg)} KG</td>
       <td style="text-align:right;${mainColor}">${mainRw !== null ? mainRw.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
       <td style="text-align:right">${fba ? fmt(fba.transitAvail) + ' Stk.' : '—'}</td>
       <td style="text-align:right;${fbaColor}">${fba && fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : fba ? fmt(fba.fbaStock) + ' Stk.' : '—'}</td>
@@ -2094,8 +2115,68 @@ function renderWochenplanung(d) {
       </table></div>
     </div>`;
 
+  // ── Sektion 7: Buyback Options ──────────────────────────────────────────────
+  // Rohware mit Überreichweite (> buyback.period.minMonths Monate bei echter
+  // Verkaufsgeschwindigkeit), nur Chargen nachweislich von ACT — Kandidaten für
+  // Rückverkauf an den Lieferanten statt Kapitalbindung/Ablauf im Lager.
+  let section6 = '';
+  if (buyback && buyback.candidates) {
+    const bfmtKg = v => v != null ? v.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—';
+    const rows = buyback.candidates.map(c => {
+      const mhdColor = c.mhdMonateRest === null ? 'color:var(--muted)'
+        : c.mhdMonateRest < 6  ? 'color:var(--danger);font-weight:700'
+        : c.mhdMonateRest < 12 ? 'color:var(--warn)'
+        : 'color:var(--success)';
+      const lotLines = c.lots.map(l =>
+        `${l.sku} · Charge ${l.charge}: ${fmt(l.aufLager)} ${l.sku === c.sack9Sku ? 'Stk.' : 'kg'}${l.actMatchingId ? ' · ACT-Nr. ' + l.actMatchingId : ''}`
+      ).join('<br>');
+      return `<tr>
+        <td><strong>${c.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${c.rohwareName}</div></td>
+        <td style="font-size:0.82rem">${c.familyKey}</td>
+        <td style="text-align:right">${bfmtKg(c.actKg)} KG<div style="font-size:0.7rem;color:var(--muted)">von ${bfmtKg(c.poolKg)} KG Pool gesamt</div></td>
+        <td style="text-align:right">${c.reichweiteMonate !== null ? c.reichweiteMonate.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Mo.' : '∞ (kein Absatz)'}</td>
+        <td style="text-align:right;${mhdColor}">${c.mhdMonateRest !== null ? c.mhdMonateRest.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Mo.' : '—'}<div style="font-size:0.7rem;color:var(--muted)">${c.earliestExpiry ? fmtDate(c.earliestExpiry) : ''}</div></td>
+        <td style="font-size:0.75rem;color:var(--muted)">${lotLines}</td>
+      </tr>`;
+    }).join('');
+
+    section6 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">♻️</span>
+        <h3>7. Buyback Options</h3>
+        ${buyback.candidates.length > 0
+          ? `<span class="wp-badge">${buyback.candidates.length} Kandidaten</span>`
+          : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Keine Überreichweite</span>`}
+      </div>
+      <div style="padding:8px 20px 0;font-size:0.75rem;color:var(--muted)">
+        Rohware-Pool (lose Rohware + -9 Gebinde) mit über ${buyback.period.minMonths} Monaten Reichweite bei aktueller Verkaufsgeschwindigkeit —
+        nur Chargen, die laut Lot-Import nachweislich von Atlantic Chemicals Trading (ACT) stammen und damit rückgabefähig sind.
+      </div>
+      ${buyback.candidates.length > 0 ? `<div class="table-wrap"><table>
+        <thead><tr>
+          <th>Rohware (AXY)</th><th>Familie</th>
+          <th style="text-align:right">ACT-Menge</th>
+          <th style="text-align:right">Reichweite</th>
+          <th style="text-align:right">MHD Rest</th>
+          <th>Chargen</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>` : '<div class="wp-empty">Keine Rohware mit Überreichweite und nachweislicher ACT-Herkunft gefunden.</div>'}
+    </div>`;
+  } else {
+    section6 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">♻️</span>
+        <h3>7. Buyback Options</h3>
+      </div>
+      <div class="wp-empty">Chargen-Import fehlt — bitte den Stock-Lots-Export hochladen, um Buyback-Kandidaten zu sehen.</div>
+    </div>`;
+  }
+
   document.getElementById('wochenContent').innerHTML =
-    metaBar + summaryCards + section1 + section2 + section2b + section3 + section4 + section5;
+    metaBar + summaryCards + section1 + section2 + section2b + section3 + section4 + section5 + section6;
 }
 
 // ─── Sellerboard Uploads ─────────────────────────────────────────────────────
@@ -2125,6 +2206,21 @@ async function uploadPurchaseOrders(input) {
     const data = await res.json();
     if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
     toast(`✓ ${data.inTransitCount} Rohwaren im Zulauf importiert`);
+    input.value = '';
+  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
+}
+
+async function uploadStockLots(input) {
+  const file = input.files[0];
+  if (!file) return;
+  toast('Chargen werden importiert…');
+  const form = new FormData();
+  form.append('file', file);
+  try {
+    const res = await fetch('/api/upload-stock-lots', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
+    toast(`✓ ${data.lotCount} Chargen (${data.skuCount} SKUs) importiert`);
     input.value = '';
   } catch (e) { toast('Fehler: ' + e.message, 'err'); }
 }

@@ -366,6 +366,7 @@ const STOCK_FULL_FILE    = path.join(DATA_DIR, 'stock-full.json');
 const FBA_STOCK_FILE     = path.join(DATA_DIR, 'fba-stock.json');
 const FBA_SHIPMENTS_FILE = path.join(DATA_DIR, 'fba-shipments.json');
 const PO_FILE            = path.join(DATA_DIR, 'purchase-orders.json');
+const STOCK_LOTS_FILE     = path.join(DATA_DIR, 'stock-lots.json');
 
 function loadStock() {
   try { return JSON.parse(fs.readFileSync(STOCK_FILE, 'utf8')); }
@@ -390,6 +391,10 @@ function loadFbaShipments() {
 function loadPurchaseOrders() {
   try { return JSON.parse(fs.readFileSync(PO_FILE, 'utf8')); }
   catch { return { incoming: {} }; }
+}
+function loadStockLots() {
+  try { return JSON.parse(fs.readFileSync(STOCK_LOTS_FILE, 'utf8')); }
+  catch { return { lots: {} }; }
 }
 
 app.post('/api/upload-stock', upload.single('file'), (req, res) => {
@@ -503,6 +508,73 @@ app.get('/api/stock', (req, res) => {
   res.json(s);
 });
 
+// ─── MRPeasy Stock-Lots Upload (Chargen, für Buyback/MHD) ─────────────────────
+// Eigener Import neben /api/upload-stock: der normale Stock-Import aggregiert
+// über alle Chargen einer SKU hinweg und verliert dabei Charge/Verfallsdatum/
+// Lieferant — genau das braucht aber das Buyback-Feature (welche Charge läuft
+// wann ab, kam sie von ACT). Nur Lots mit "Auf Lager" > 0 werden behalten.
+app.post('/api/upload-stock-lots', upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
+    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    if (!lines.length) return res.status(400).json({ error: 'Leere Datei' });
+
+    const parseRow = l => l.split(';').map(v => v.replace(/^"|"$/g, '').trim());
+    const headers = parseRow(lines[0]);
+    const idx = name => headers.indexOf(name);
+
+    const iCharge      = idx('Charge');
+    const iSku         = idx('Artikelnr.');
+    const iStandort    = idx('Standort');
+    const iStock       = idx('Auf Lager');
+    const iAvail       = idx('Verfügbar');
+    const iExpiry      = idx('Verfallsdatum');
+    const iMhd         = idx('Mindestens haltbar bis (MHD)');
+    const iLieferantNr = idx('Lieferantennummer');
+    const iLieferant   = idx('Lieferant');
+    const iActMatch    = idx('ACT Matching ID');
+
+    if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Auf Lager nicht gefunden' });
+
+    const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
+    const lots = {}; // Artikelnr. → [ { charge, standort, aufLager, verfuegbar, verfallsdatum, mhd, lieferant, lieferantennummer, actMatchingId } ]
+
+    for (let i = 1; i < lines.length; i++) {
+      const cols     = parseRow(lines[i]);
+      const sku      = cols[iSku];
+      if (!sku) continue;
+      const aufLager = pf(cols[iStock]);
+      if (aufLager <= 0) continue; // leere Chargen sind für Buyback irrelevant
+
+      if (!lots[sku]) lots[sku] = [];
+      lots[sku].push({
+        charge:            cols[iCharge] || '',
+        standort:          iStandort >= 0 ? (cols[iStandort] || '') : '',
+        aufLager,
+        verfuegbar:        iAvail  >= 0 ? pf(cols[iAvail]) : aufLager,
+        verfallsdatum:     iExpiry >= 0 ? (cols[iExpiry] || '') : '',
+        mhd:               iMhd    >= 0 ? (cols[iMhd] || '')    : '',
+        lieferant:         iLieferant   >= 0 ? (cols[iLieferant]   || '') : '',
+        lieferantennummer: iLieferantNr >= 0 ? (cols[iLieferantNr] || '') : '',
+        actMatchingId:     iActMatch >= 0 ? (cols[iActMatch] || '') : '',
+      });
+    }
+
+    fs.writeFileSync(STOCK_LOTS_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), lots }, null, 2));
+    res.json({
+      ok: true,
+      skuCount: Object.keys(lots).length,
+      lotCount: Object.values(lots).reduce((s, a) => s + a.length, 0),
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/stock-lots', (req, res) => res.json(loadStockLots()));
+
 // ─── MRPeasy Articles Upload ──────────────────────────────────────────────────
 
 const ARTICLES_FILE = path.join(DATA_DIR, 'articles.json');
@@ -533,6 +605,8 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
     const iAbfuell  = idx('Abfüllklasse');
     const iFuell    = idx('Füllrate Plan pro Stunde');
     const iActive   = idx('ACTIVE');
+    const iLieferant   = idx('Lieferant');
+    const iLieferantNr = idx('Lieferantennummer');
 
     if (iNr === -1 || iMin === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Mindestbestand nicht gefunden' });
 
@@ -556,6 +630,8 @@ app.post('/api/upload-articles', upload.single('file'), (req, res) => {
         abfuellklasse:     iAbfuell >= 0 ? (cols[iAbfuell] || '') : '',
         fuellrateProStunde: iFuell   >= 0 ? pf(cols[iFuell])      : 0,
         active:      iActive >= 0 ? (cols[iActive] || '').trim().toLowerCase() === 'ja' : false,
+        lieferant:         iLieferant   >= 0 ? (cols[iLieferant]   || '') : '',
+        lieferantennummer: iLieferantNr >= 0 ? (cols[iLieferantNr] || '') : '',
       };
     }
 
@@ -1689,6 +1765,137 @@ app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
 
 app.get('/api/purchase-orders', (req, res) => res.json(loadPurchaseOrders()));
 
+// ─── Buyback (Überreichweite → Rückverkauf an Lieferant) ──────────────────────
+// Kandidaten: Rohware-Pool (lose Rohware + -9 Gebinde, siehe Wochenplanung) mit
+// mehr als BUYBACK_MIN_MONTHS Monaten Reichweite bei echter Verkaufsgeschwindig-
+// keit — bewusst NICHT die Ziel-Lücken-Reichweite aus der Wochenplanung, die bei
+// übervollem Pool auf null/null läuft und Überbestand gerade dort unsichtbar
+// macht, wo er am größten ist. Nur Chargen, die laut Lot-Import nachweislich von
+// ACT (Atlantic Chemicals Trading) stammen, da nur dorthin ein Rückverkauf geht.
+const BUYBACK_MIN_MONTHS  = 3;
+const ACT_LIEFERANT_MATCH = /atlantic chemicals/i;
+
+async function buildBuybackData(reqDays) {
+  const cfg    = loadConfig();
+  const days   = reqDays || cfg.forecastDays || 90;
+  const months = days / 30;
+
+  const partsData = loadParts();
+  const partsMap  = partsData.mapping || {};
+  const artData   = loadArticles();
+  const artItems  = artData.items || {};
+  const lotsData  = loadStockLots();
+  const lots      = lotsData.lots || {};
+
+  let lineItems = [];
+  if (cfg.shopifyDomain && cfg.shopifyToken) {
+    try {
+      const shopify = new ShopifyClient(cfg.shopifyDomain, cfg.shopifyToken);
+      lineItems = await shopify.getLineItems(days);
+    } catch { /* graceful degradation: kein Shopify → velocity = 0 */ }
+  }
+
+  // Gesamtverbrauch (kg/Monat) pro Rohware-Familie über alle verkauften
+  // Packungsgrößen hinweg — das ist die reale Abbau-Geschwindigkeit des Pools.
+  const kgPerPrefix = {};
+  for (const item of lineItems) {
+    const prefix = item.sku.replace(/-\d+$/, '');
+    kgPerPrefix[prefix] = (kgPerPrefix[prefix] || 0) + (item.kg || 0);
+  }
+
+  const lotsFor = (sku) => (lots[sku] || []).map(l => ({ ...l, sku }));
+  const actLotsFor = (sku) => lotsFor(sku).filter(l => ACT_LIEFERANT_MATCH.test(l.lieferant || ''));
+
+  const candidates = [];
+  for (const [prefix, rohInfo] of Object.entries(partsMap)) {
+    const nr       = rohInfo.rohwareNr;
+    const rawArt   = artItems[nr];
+    const rawKg    = rawArt ? (rawArt.available || 0) : 0;
+    const sack9Sku = prefix + '-9';
+    const sack9Art = artItems[sack9Sku];
+    const sackKg   = sack9Art ? (sack9Art.weightKg || 25) : 25;
+    const pool9Stk = sack9Art ? (sack9Art.available || 0) : 0;
+    const poolKg   = rawKg + pool9Stk * sackKg;
+    if (poolKg <= 0) continue;
+
+    const vkgPM = months > 0 ? (kgPerPrefix[prefix] || 0) / months : 0;
+    const reichweiteMonate = vkgPM > 0 ? +(poolKg / vkgPM).toFixed(1) : null;
+    const isUeberreichweite = reichweiteMonate === null || reichweiteMonate > BUYBACK_MIN_MONTHS;
+    if (!isUeberreichweite) continue;
+
+    // Rückgabefähigkeit: entweder wird die Rohware-Artikelnummer laut MRPeasy-
+    // Stammdaten grundsätzlich bei ACT geführt (deckt auch -9-Gebinde ab, die
+    // selbst keinen Lieferanten in der Charge tragen, weil sie "virtuell"
+    // umproduziert wurden) — oder ersatzweise, falls das Stammdatenfeld leer
+    // ist, trägt wenigstens eine einzelne Charge nachweislich ACT als Lieferant.
+    const artSupplierIsAct = rawArt && ACT_LIEFERANT_MATCH.test(rawArt.lieferant || '');
+    let relevantLots, actKg, matchedVia;
+    if (artSupplierIsAct) {
+      relevantLots = [...lotsFor(nr), ...lotsFor(sack9Sku)];
+      actKg        = poolKg;
+      matchedVia   = 'artikel';
+    } else {
+      relevantLots = [...actLotsFor(nr), ...actLotsFor(sack9Sku)];
+      if (relevantLots.length === 0) continue;
+      actKg      = relevantLots.reduce((s, l) => s + l.aufLager * (l.sku === sack9Sku ? sackKg : 1), 0);
+      matchedVia = 'charge';
+    }
+
+    const expiries = relevantLots.map(l => parseDeDate(l.verfallsdatum)).filter(Boolean);
+    const earliestExpiry = expiries.length ? new Date(Math.min(...expiries.map(d => d.getTime()))) : null;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const mhdMonateRest = earliestExpiry ? +((earliestExpiry - today) / (1000 * 60 * 60 * 24 * 30)).toFixed(1) : null;
+
+    candidates.push({
+      familyKey:    prefix,
+      rohwareNr:    nr,
+      rohwareName:  rohInfo.rohwareName,
+      sack9Sku,
+      poolKg:       +poolKg.toFixed(1),
+      actKg:        +actKg.toFixed(1),
+      matchedVia,
+      verbrauchKgProMonat: +vkgPM.toFixed(1),
+      reichweiteMonate,
+      earliestExpiry: earliestExpiry ? earliestExpiry.toISOString().slice(0, 10) : null,
+      mhdMonateRest,
+      lots: relevantLots.map(l => ({
+        sku: l.sku, charge: l.charge, aufLager: l.aufLager,
+        verfallsdatum: l.verfallsdatum, actMatchingId: l.actMatchingId,
+        lieferant: l.lieferant,
+      })),
+    });
+  }
+
+  // Größtes Überangebot zuerst (unbegrenzte Reichweite = null → ans Ende der
+  // "unendlich"-Gruppe, aber vor allem anderen, da absolut totes Inventar).
+  candidates.sort((a, b) => (b.reichweiteMonate ?? Infinity) - (a.reichweiteMonate ?? Infinity));
+
+  return {
+    period: { days, months: +months.toFixed(1), minMonths: BUYBACK_MIN_MONTHS },
+    updatedAt: {
+      articles: artData.updatedAt || null,
+      parts:    partsData.updatedAt || null,
+      lots:     lotsData.updatedAt || null,
+    },
+    candidates,
+    summary: {
+      total:   candidates.length,
+      totalKg: +candidates.reduce((s, c) => s + c.actKg, 0).toFixed(1),
+    },
+  };
+}
+
+app.get('/api/buyback', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || null;
+    const data = await buildBuybackData(days);
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── FBA Wochenplanung ────────────────────────────────────────────────────────
 // Lead times: 7 Tage Produktion + 14 Tage Amazon Einlagerung = 21 Tage gesamt
 
@@ -2109,7 +2316,25 @@ async function buildWochenplanungData(reqDays) {
       const sack9Art  = artItems[sack9Sku];
       const sackKg    = sack9Art ? (sack9Art.weightKg || 25) : 25;
       const pool9Stk  = (mainItems[sack9Sku] || {}).available || 0;
-      const poolKg    = pool9Stk * sackKg;
+      // Rohwarenpool = lose Rohware (Artikelnr. A...) + bereits virtuell in
+      // -9-Gebinde umproduzierte Ware. Beides ist im Bestellkreislauf
+      // äquivalent (Einkauf → sofortige virtuelle Umproduktion in -9), siehe
+      // Planung-Endpunkt (Zeile ~1175), das hier fehlte bisher.
+      const rawArt    = artItems[rohInfo.rohwareNr];
+      const rawKg     = rawArt ? (rawArt.available || 0) : 0;
+      const poolKg    = pool9Stk * sackKg + rawKg;
+
+      // Direktverkauf der -9-Großgebinde selbst (z.B. 25kg-Sack B2B/Großhandel
+      // über Shopify) — wird sonst nirgends erfasst, weil die sizes-Schleife
+      // unten nur -1 bis -5 betrachtet und -9 nur als Rohware-Pool behandelt.
+      // Ohne das läuft der Pool leer, ohne dass je ein Einkauf ausgelöst wird.
+      const sd9          = shopifyDemand[sack9Sku] || { direct: 0, bundles: {} };
+      const bundleUnits9 = Object.values(sd9.bundles).reduce((s, b) => s + b.baseUnits, 0);
+      const totalUnits9  = sd9.direct + bundleUnits9;
+      const velocityPW9  = weeks > 0 ? totalUnits9 / weeks : 0;
+      const targetStk9   = Math.ceil(velocityPW9 * targetWeeks);
+      const rawNeed9     = Math.max(0, targetStk9 - pool9Stk);
+      const direct9Kg    = rawNeed9 * sackKg;
 
       // FBM Produktion: alle Größen -1 bis -5 die aktiv sind
       const sizes = ['1','2','3','4','5'];
@@ -2230,7 +2455,7 @@ async function buildWochenplanungData(reqDays) {
       const fbaResult = fbaResults.find(f => f.size === '5') || fbaResults[0] || null;
 
       // Einkauf — offene Bestellungen (Bestellt/Neue Bestellung/Verschickt) abziehen
-      const totalProdKg  = totalFbmKg + totalFbaKg;
+      const totalProdKg  = totalFbmKg + totalFbaKg + direct9Kg;
       const poEntry      = poIncoming[rohInfo.rohwareNr] || null;
       const incomingKg   = poEntry ? poEntry.totalKg : 0;
       const buyKg        = Math.max(0, totalProdKg - poolKg);
@@ -2245,6 +2470,11 @@ async function buildWochenplanungData(reqDays) {
       const avgKgPerDay = days > 0 ? totalProdKg / days : 0;
       const rohwareReichweiteTage = avgKgPerDay > 0 ? +(poolKg / avgKgPerDay).toFixed(1) : null;
       const rohwareUrgent = stillBuySacks > 0 && rohwareReichweiteTage !== null && rohwareReichweiteTage < rohwareTargetDays;
+      // Pool (lose Rohware + -9 Gebinde) ist komplett leer — unabhängig davon, ob
+      // aktuell ein Produktionsbedarf berechnet wurde (der Downstream-Bestand kann
+      // die Lücke gerade noch überdecken). Ohne Lagerpuffer entsteht bei der
+      // nächsten Produktion eine Lieferzeit-Lücke, daher separat sichtbar machen.
+      const poolEmpty = poolKg <= 0 && (fbmProduction.length > 0 || rawNeed9 > 0);
 
       families.push({
         familyKey:   prefix,
@@ -2253,13 +2483,22 @@ async function buildWochenplanungData(reqDays) {
         sack9Sku,
         sack9Stock:  pool9Stk,
         sackKg,
+        rawKg:       +rawKg.toFixed(1),
         poolKg:      +poolKg.toFixed(1),
+        direct9:     {
+          velocityPW: +velocityPW9.toFixed(2),
+          current:    pool9Stk,
+          target:     targetStk9,
+          rawNeed:    rawNeed9,
+          kg:         +direct9Kg.toFixed(1),
+        },
         fbmProduction,
         fba:         fbaResult,
         fbaAll:      fbaResults,
         einkauf: {
           totalFbmKg:   +totalFbmKg.toFixed(1),
           totalFbaKg:   +totalFbaKg.toFixed(1),
+          direct9Kg:    +direct9Kg.toFixed(1),
           totalProdKg:  +totalProdKg.toFixed(1),
           poolKg:       +poolKg.toFixed(1),
           buyKg:        +buyKg.toFixed(1),
@@ -2271,6 +2510,7 @@ async function buildWochenplanungData(reqDays) {
           stillBuySacks,
           rohwareReichweiteTage,
           rohwareUrgent,
+          poolEmpty,
         },
       });
     }
@@ -2314,6 +2554,7 @@ async function buildWochenplanungData(reqDays) {
       ).length,
       ueberfaelligeBestellungen: families.filter(f => f.einkauf.hasOverdue).length,
       rohwareDringend:   families.filter(f => f.einkauf.rohwareUrgent).length,
+      rohwarePoolLeer:   families.filter(f => f.einkauf.poolEmpty).length,
       transitDringend:   families.reduce((s, f) => s + f.fbaAll.filter(x => x.transitUrgent).length, 0),
     };
 

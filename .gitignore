@@ -15,6 +15,7 @@ update-log.json
 fba-stock.json
 fba-shipments.json
 purchase-orders.json
+stock-lots.json
 
 # OS
 .DS_Store
