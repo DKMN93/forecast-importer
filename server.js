@@ -435,7 +435,12 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
 
     for (let i = 1; i < lines.length; i++) {
       const cols    = parseRow(lines[i]);
-      const sku     = (cols[iSku] || '').toUpperCase();
+      // Kein .toUpperCase() hier: Artikel-Import, Stücklisten-Mapping und alle
+      // anderen Lookups verwenden die SKU exakt wie im Export (z.B. "glut-pl-9"
+      // klein). Uppercasing nur hier hätte den Key stumm von jedem anderen
+      // Lookup entkoppelt — betraf bisher exakt die Glutamin-Familie, die als
+      // einzige im ganzen Katalog kleingeschrieben geführt wird.
+      const sku     = cols[iSku] || '';
       if (!sku) continue;
       const standort = iStandort >= 0 ? cols[iStandort] : 'Main site';
       if (standort === 'Amazon FBA') continue; // ERP-Umbuchung, immer ignorieren
