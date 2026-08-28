@@ -1780,6 +1780,42 @@ app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
 
 app.get('/api/purchase-orders', (req, res) => res.json(loadPurchaseOrders()));
 
+// ─── Sync-Status (Datenimport-Übersicht für die Sync-Ansicht) ────────────────
+// Ein Endpunkt, der für jede Importquelle Zeitstempel + Kurzstatistik liefert,
+// statt dass das Frontend 6-7 einzelne GETs zusammensuchen muss.
+app.get('/api/sync-status', (req, res) => {
+  const artData      = loadArticles();
+  const partsData    = loadParts();
+  const stockData    = loadStock();
+  const lotsData     = loadStockLots();
+  const poData       = loadPurchaseOrders();
+  const fbaStockData = loadFbaStock();
+  const fbaShipData  = loadFbaShipments();
+
+  const lotCount = Object.values(lotsData.lots || {}).reduce((s, arr) => s + arr.length, 0);
+  // "Lagerbestand & Chargen" kommt aus derselben Quelldatei, aber zwei getrennten
+  // Importen (stock.json aggregiert, stock-lots.json chargenscharf) — als eine
+  // Karte im UI, daher der jüngere der beiden Zeitstempel.
+  const stockUpdatedAt = [stockData.updatedAt, lotsData.updatedAt].filter(Boolean).sort().pop() || null;
+
+  res.json({
+    sources: [
+      { key: 'articles', updatedAt: artData.updatedAt || null,
+        stat: `${Object.keys(artData.items || {}).length} Artikel` },
+      { key: 'parts', updatedAt: partsData.updatedAt || null,
+        stat: `${Object.keys(partsData.mapping || {}).length} Rohware-Mappings` },
+      { key: 'stock', updatedAt: stockUpdatedAt,
+        stat: `${Object.keys(stockData.items || {}).length} SKUs · ${lotCount} Chargen` },
+      { key: 'purchaseOrders', updatedAt: poData.updatedAt || null,
+        stat: `${Object.keys(poData.incoming || {}).length} offene Positionen` },
+      { key: 'fbaStock', updatedAt: fbaStockData.updatedAt || null,
+        stat: `${Object.keys(fbaStockData.items || {}).length} FBA-SKUs` },
+      { key: 'fbaShipments', updatedAt: fbaShipData.updatedAt || null,
+        stat: `${(fbaShipData.shipments || []).length} Sendungen` },
+    ],
+  });
+});
+
 // ─── Buyback (Überreichweite → Rückverkauf an Lieferant) ──────────────────────
 // Kandidaten: Rohware-Pool (lose Rohware + -9 Gebinde, siehe Wochenplanung) mit
 // mehr als BUYBACK_MIN_MONTHS Monaten Reichweite bei echter Verkaufsgeschwindig-

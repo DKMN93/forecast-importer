@@ -248,6 +248,23 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .size-chip.warn { border-color:var(--warn); color:var(--warn); }
 .lager-filter-bar { display:flex; gap:8px; margin-bottom:18px; flex-wrap:wrap; align-items:center; }
 
+/* ── Sync ── */
+.sync-intro { color:var(--muted); font-size:0.86rem; margin-bottom:20px; max-width:640px; }
+.sync-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:18px; }
+.sync-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; display:flex; flex-direction:column; gap:10px; }
+.sync-card-title { font-family:'Libre Baskerville', serif; font-weight:700; color:var(--accent); font-size:0.95rem; }
+.sync-freshness { display:flex; align-items:center; gap:7px; font-size:0.78rem; color:var(--muted); }
+.freshness-dot { width:8px; height:8px; border-radius:50%; background:var(--border); flex-shrink:0; }
+.freshness-dot.fresh { background:var(--success); }
+.freshness-dot.aging { background:var(--warn); }
+.freshness-dot.stale { background:var(--danger); }
+.sync-stat { font-size:0.86rem; color:var(--text); font-weight:600; }
+.sync-drop { border:2px dashed var(--border); border-radius:6px; padding:16px 10px; text-align:center; font-size:0.8rem; color:var(--muted); cursor:pointer; transition:all 0.15s; }
+.sync-drop:hover { border-color:var(--accent2); color:var(--text); }
+.sync-drop.dragover { border-color:var(--accent); background:rgba(0,68,54,0.06); color:var(--accent); }
+.sync-drop input[type=file] { display:none; }
+.sync-hint { font-size:0.72rem; color:var(--muted); line-height:1.4; }
+
 /* ── Wochenplanung ── */
 .wp-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:20px; overflow:hidden; }
 .wp-section-header { padding:12px 20px; background:var(--accent); color:#fff; display:flex; align-items:center; gap:10px; }
@@ -288,6 +305,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
   <div class="nav">
     <div class="nav-item active" onclick="showView('dashboard')">
       <span class="icon">📊</span> Dashboard
+    </div>
+    <div class="nav-item" onclick="showView('sync')">
+      <span class="icon">🔄</span> Sync
     </div>
     <div class="nav-item" onclick="showView('wochen')">
       <span class="icon">📋</span> Wochenplanung
@@ -401,6 +421,14 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <div class="view" id="view-dashboard">
       <div id="dashboardContent">
         <div class="loading-overlay"><div class="spinner"></div>Lade Dashboard…</div>
+      </div>
+    </div>
+
+    <!-- ─── SYNC VIEW ─── -->
+    <div class="view" id="view-sync">
+      <p class="sync-intro">Übersicht aller Datenquellen aus MRPeasy und Sellerboard. Datei hierher ziehen oder auf die Fläche klicken, um sie neu zu importieren — jede Karte zeigt, wie aktuell ihre Daten sind.</p>
+      <div id="syncContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade Status…</div>
       </div>
     </div>
 
@@ -520,41 +548,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
         </div>
 
         <div class="table-box" style="padding:24px; margin-top:20px">
-          <h3 style="margin-bottom:16px">Daten hochladen</h3>
-          <div style="display:flex; flex-direction:column; gap:10px">
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Stücklisten hochladen (parts CSV) — Rohware-Mapping</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadParts(this)">
-            </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Artikel hochladen (articles CSV aus MRPeasy)</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadArticles(this)">
-            </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Lagerbestand hochladen (stock_lots CSV — alle Standorte)</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadStock(this)">
-            </label>
-            <!-- Transit-Daten werden automatisch aus dem MAIN-Lager-Upload extrahiert (Standort = "Amazon FBA") -->
-            <div style="padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.82rem;color:var(--muted);background:var(--surface2)">
-              Transit-Daten werden automatisch aus dem Chargen-Upload (oben) extrahiert — Zeilen mit Standort "Amazon FBA" fließen ins Transitlager.
-            </div>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Lager XLSX — FBA Bestand</div>
-              <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardLager(this)">
-            </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Sellerboard Sendungen XLSX — FBA Shipments</div>
-              <input type="file" accept=".xlsx,.xls" style="display:none" onchange="uploadSellerboardShipments(this)">
-            </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Bestellungen hochladen (purchase_orders CSV aus MRPeasy)</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadPurchaseOrders(this)">
-            </label>
-            <label>
-              <div class="btn-ghost" style="text-align:left;cursor:pointer;display:block;padding:9px 20px;border-radius:6px;border:1px solid var(--border);font-size:0.86rem;font-weight:600;color:var(--muted)">Chargen mit MHD hochladen (stock_lots CSV — für Buyback Options)</div>
-              <input type="file" accept=".csv" style="display:none" onchange="uploadStockLots(this)">
-            </label>
-          </div>
+          <h3 style="margin-bottom:10px">Daten hochladen</h3>
+          <p style="font-size:0.86rem;color:var(--muted);margin-bottom:14px">Artikel, Stücklisten, Lagerbestand, Bestellungen und Sellerboard-Exporte werden jetzt zentral in der Sync-Ansicht verwaltet — dort siehst du auch, wie aktuell jede Datenquelle ist.</p>
+          <button class="btn-primary" onclick="showView('sync')">Zur Sync-Ansicht</button>
         </div>
       </div>
     </div>
@@ -607,6 +603,7 @@ async function api(path, opts = {}) {
 // ─── Nav ──────────────────────────────────────────────────────────────────────
 const viewTitles = {
   setup: 'Einrichtung', dashboard: 'Dashboard',
+  sync: 'Sync',
   wochen: 'Wochenplanung',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
   lager: 'Lagerübersicht', fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
@@ -625,6 +622,7 @@ function showView(name) {
   currentView = name;
 
   if (name === 'dashboard' && !dashData) loadDashboard();
+  if (name === 'sync')       loadSyncStatus();
   if (name === 'wochen')     loadWochenplanung();
   if (name === 'planung')    loadPlanung();
   if (name === 'artikel')    loadArtikel();
@@ -675,57 +673,97 @@ async function testShopify(silent = false) {
   }
 }
 
-// ─── Parts Upload ─────────────────────────────────────────────────────────────
-async function uploadParts(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Stücklisten werden importiert…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-parts', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ ${data.count} SKU→Rohware Mappings importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
-}
+// ─── Sync (Datenimport-Übersicht) ──────────────────────────────────────────────
+const SYNC_SOURCES = [
+  { key: 'articles', label: 'Artikel', endpoints: ['/api/upload-articles'],
+    accept: '.csv', hint: 'articles_*.csv aus dem MRPeasy-Artikelexport' },
+  { key: 'parts', label: 'Stücklisten', endpoints: ['/api/upload-parts'],
+    accept: '.csv', hint: 'parts_*.csv aus dem MRPeasy-Stücklistenexport (Rohware-Mapping)' },
+  { key: 'stock', label: 'Lagerbestand & Chargen', endpoints: ['/api/upload-stock', '/api/upload-stock-lots'],
+    accept: '.csv', hint: 'stock_lots_*.csv aus MRPeasy — eine Datei, füllt Lagerbestand (alle Standorte) und Chargen/MHD für Buyback' },
+  { key: 'purchaseOrders', label: 'Bestellungen', endpoints: ['/api/upload-purchase-orders'],
+    accept: '.csv', hint: 'purchase_orders_*.csv aus MRPeasy' },
+  { key: 'fbaStock', label: 'Sellerboard Lager', endpoints: ['/api/upload-sellerboard-lager'],
+    accept: '.xlsx,.xls', hint: 'Sellerboard Lager-Export (FBA-Bestand)' },
+  { key: 'fbaShipments', label: 'Sellerboard Sendungen', endpoints: ['/api/upload-sellerboard-shipments'],
+    accept: '.xlsx,.xls', hint: 'Sellerboard Sendungen-Export (FBA-Shipments)' },
+];
 
-// ─── Artikel Upload ───────────────────────────────────────────────────────────
-async function uploadArticles(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Artikel werden importiert…');
-  const form = new FormData();
-  form.append('file', file);
+let syncStatusData = null;
+
+async function loadSyncStatus() {
   try {
-    const res = await fetch('/api/upload-articles', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    const groupInfo = Object.entries(data.groups).map(([g,n]) => `${g}: ${n}`).join(', ');
-    toast(`✓ ${data.total} Artikel importiert — ${groupInfo}`);
-    input.value = '';
+    syncStatusData = await api('/sync-status');
+    renderSyncView();
   } catch (e) {
-    toast('Upload fehlgeschlagen: ' + e.message, 'err');
+    document.getElementById('syncContent').innerHTML = `<div class="wp-empty">Fehler beim Laden: ${e.message}</div>`;
   }
 }
 
-// ─── Chargen/Stock Upload ─────────────────────────────────────────────────────
-async function uploadStock(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Bestand wird geladen…');
+// < 2 Tage frisch, < 5 Tage im Auge behalten, sonst veraltet — Richtwerte für
+// einen Tool mit wöchentlichem Planungsrhythmus.
+function syncFreshness(updatedAt) {
+  if (!updatedAt) return { cls: '', label: 'noch nie importiert' };
+  const days = (Date.now() - new Date(updatedAt).getTime()) / 86400000;
+  const cls  = days < 2 ? 'fresh' : days < 5 ? 'aging' : 'stale';
+  const rel  = days < 1 ? 'heute' : days < 2 ? 'gestern' : `vor ${Math.floor(days)} Tagen`;
+  const dateLabel = new Date(updatedAt).toLocaleString('de', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return { cls, label: `${rel} · ${dateLabel}` };
+}
+
+function renderSyncView() {
+  const el = document.getElementById('syncContent');
+  if (!syncStatusData) { el.innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Status…</div>'; return; }
+  const byKey = {};
+  (syncStatusData.sources || []).forEach(s => byKey[s.key] = s);
+
+  el.innerHTML = `<div class="sync-grid">${SYNC_SOURCES.map(cfg => {
+    const s  = byKey[cfg.key] || {};
+    const fr = syncFreshness(s.updatedAt);
+    return `<div class="sync-card">
+      <div class="sync-card-title">${cfg.label}</div>
+      <div class="sync-freshness"><span class="freshness-dot ${fr.cls}"></span>${fr.label}</div>
+      <div class="sync-stat">${s.stat || '—'}</div>
+      <label class="sync-drop" data-key="${cfg.key}">
+        Datei hierher ziehen oder klicken
+        <input type="file" accept="${cfg.accept}" onchange="handleSyncFile('${cfg.key}', this.files[0]); this.value='';">
+      </label>
+      <div class="sync-hint">${cfg.hint}</div>
+    </div>`;
+  }).join('')}</div>`;
+
+  el.querySelectorAll('.sync-drop').forEach(drop => {
+    drop.addEventListener('dragover',  e => { e.preventDefault(); drop.classList.add('dragover'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+    drop.addEventListener('drop', e => {
+      e.preventDefault();
+      drop.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file) handleSyncFile(drop.dataset.key, file);
+    });
+  });
+}
+
+async function syncUploadOne(file, endpoint) {
   const form = new FormData();
   form.append('file', file);
+  const res  = await fetch(endpoint, { method: 'POST', body: form });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || 'Upload fehlgeschlagen');
+  return data;
+}
+
+async function handleSyncFile(key, file) {
+  if (!file) return;
+  const cfg = SYNC_SOURCES.find(s => s.key === key);
+  if (!cfg) return;
+  toast(cfg.label + ' wird importiert…');
   try {
-    const res = await fetch('/api/upload-stock', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    const transitInfo = data.transitSkuCount > 0 ? ` · Transit: ${data.transitSkuCount} SKUs (${data.transitSkus?.join(', ')})` : '';
-    toast(`✓ Main: ${data.mainSkuCount} SKUs${transitInfo}`);
-    input.value = '';
+    for (const endpoint of cfg.endpoints) await syncUploadOne(file, endpoint);
+    toast('✓ ' + cfg.label + ' aktualisiert');
+    await loadSyncStatus();
   } catch (e) {
-    toast('Upload fehlgeschlagen: ' + e.message, 'err');
+    toast('Fehler: ' + e.message, 'err');
   }
 }
 
@@ -2184,67 +2222,6 @@ function renderWochenplanung(d, buyback) {
 
   document.getElementById('wochenContent').innerHTML =
     metaBar + summaryCards + section1 + section2 + section2b + section3 + section4 + section5 + section6;
-}
-
-// ─── Sellerboard Uploads ─────────────────────────────────────────────────────
-async function uploadSellerboardLager(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Sellerboard FBA Lager wird importiert…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-sellerboard-lager', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ FBA Lager: ${data.skuCount} SKUs importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
-}
-
-async function uploadPurchaseOrders(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Bestellungen werden importiert…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-purchase-orders', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ ${data.inTransitCount} Rohwaren im Zulauf importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
-}
-
-async function uploadStockLots(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Chargen werden importiert…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-stock-lots', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ ${data.lotCount} Chargen (${data.skuCount} SKUs) importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
-}
-
-async function uploadSellerboardShipments(input) {
-  const file = input.files[0];
-  if (!file) return;
-  toast('Sellerboard Sendungen werden importiert…');
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const res = await fetch('/api/upload-sellerboard-shipments', { method: 'POST', body: form });
-    const data = await res.json();
-    if (!res.ok) { toast('Fehler: ' + data.error, 'err'); return; }
-    toast(`✓ ${data.shipmentCount} Sendungen importiert`);
-    input.value = '';
-  } catch (e) { toast('Fehler: ' + e.message, 'err'); }
 }
 
 // ─── FBA Planung ──────────────────────────────────────────────────────────────
