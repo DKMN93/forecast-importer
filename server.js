@@ -1727,17 +1727,25 @@ app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
 
     if (iSku === -1 || iMenge === -1) return res.status(400).json({ error: 'Unbekanntes Format' });
 
+    // Menge steht in der Maßeinheit des bestellten Artikels: bei Rohstoffen (AXY)
+    // ist das kg, bei den -9-Gebinden (seit Umstieg auf Direkteinkauf) ist es
+    // "Stk." — dort muss mit dem Gebindegewicht (weightKg) auf kg umgerechnet
+    // werden, sonst würde z.B. "2 Gebinde" als "2 kg" statt 50 kg gezählt.
+    const artItems = (loadArticles().items) || {};
     const pf  = v => parseFloat((v || '0').replace(',', '.')) || 0;
     const today = new Date(); today.setHours(0, 0, 0, 0);
-    const incoming = {}; // axyNr → { sku, name, totalKg, lieferant, orders[] }
+    const incoming = {}; // Artikelnr. (AXY oder -9-SKU) → { sku, name, totalKg, lieferant, orders[] }
 
     for (let i = 1; i < lines.length; i++) {
       const cols   = parseRow(lines[i]);
       const status = iStatus >= 0 ? cols[iStatus] : '';
       if (!OFFENE_PO_STATI.has(status)) continue;
 
-      const sku   = cols[iSku];
-      const menge = pf(cols[iMenge]); // kg
+      const sku      = cols[iSku];
+      const mengeRaw = pf(cols[iMenge]);
+      const art      = artItems[sku];
+      const isKgUnit = art ? (art.unit || '').toLowerCase() === 'kg' : true; // Fallback: unbekannter Artikel → wie bisher als kg behandeln
+      const menge    = isKgUnit ? mengeRaw : mengeRaw * (art.weightKg || 1);
       if (!sku || menge <= 0) continue;
 
       const liefdat  = iLiefdat >= 0 ? cols[iLiefdat] : '';
@@ -1754,6 +1762,8 @@ app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
       incoming[sku].orders.push({
         poNr:    cols[iNr] || '',
         menge,
+        mengeOriginal: mengeRaw,
+        einheitOriginal: art ? (art.unit || '') : '',
         status,
         liefdat,
         overdue,
@@ -1828,12 +1838,13 @@ async function buildBuybackData(reqDays) {
     const isUeberreichweite = reichweiteMonate === null || reichweiteMonate > BUYBACK_MIN_MONTHS;
     if (!isUeberreichweite) continue;
 
-    // Rückgabefähigkeit: entweder wird die Rohware-Artikelnummer laut MRPeasy-
-    // Stammdaten grundsätzlich bei ACT geführt (deckt auch -9-Gebinde ab, die
-    // selbst keinen Lieferanten in der Charge tragen, weil sie "virtuell"
-    // umproduziert wurden) — oder ersatzweise, falls das Stammdatenfeld leer
-    // ist, trägt wenigstens eine einzelne Charge nachweislich ACT als Lieferant.
-    const artSupplierIsAct = rawArt && ACT_LIEFERANT_MATCH.test(rawArt.lieferant || '');
+    // Rückgabefähigkeit: entweder wird die Rohware-Artikelnummer ODER die -9-SKU
+    // laut MRPeasy-Stammdaten grundsätzlich bei ACT geführt (seit dem Umstieg auf
+    // Direkteinkauf der -9-SKU kann der Lieferant dort statt am AXY-Artikel
+    // gepflegt sein) — oder ersatzweise, falls beide Stammdatenfelder leer sind,
+    // trägt wenigstens eine einzelne Charge nachweislich ACT als Lieferant.
+    const artSupplierIsAct = (rawArt   && ACT_LIEFERANT_MATCH.test(rawArt.lieferant   || ''))
+                           || (sack9Art && ACT_LIEFERANT_MATCH.test(sack9Art.lieferant || ''));
     let relevantLots, actKg, matchedVia;
     if (artSupplierIsAct) {
       relevantLots = [...lotsFor(nr), ...lotsFor(sack9Sku)];
@@ -2462,10 +2473,17 @@ async function buildWochenplanungData(reqDays) {
       // bevorzugt die 1kg-Variante (-5), sonst die erste gefundene Größe.
       const fbaResult = fbaResults.find(f => f.size === '5') || fbaResults[0] || null;
 
-      // Einkauf — offene Bestellungen (Bestellt/Neue Bestellung/Verschickt) abziehen
-      const totalProdKg  = totalFbmKg + totalFbaKg + direct9Kg;
-      const poEntry      = poIncoming[rohInfo.rohwareNr] || null;
-      const incomingKg   = poEntry ? poEntry.totalKg : 0;
+      // Einkauf — offene Bestellungen (Bestellt/Neue Bestellung/Verschickt) abziehen.
+      // PO-Matching läuft auf zwei Keys: die AXY-Rohware-Nr. (Alt-Bestellungen aus
+      // der Zeit vor der Umstellung, die noch offen sein können) und die -9-SKU
+      // (Einkauf läuft jetzt direkt darauf). Kein Stichtag nötig — sobald keine
+      // AXY-POs mehr offen sind, liefert der erste Lookup dauerhaft nichts mehr.
+      const totalProdKg   = totalFbmKg + totalFbaKg + direct9Kg;
+      const poEntryAxy    = poIncoming[rohInfo.rohwareNr] || null;
+      const poEntry9      = poIncoming[sack9Sku]          || null;
+      const incomingKg    = (poEntryAxy ? poEntryAxy.totalKg : 0) + (poEntry9 ? poEntry9.totalKg : 0);
+      const incomingOrders = [...(poEntryAxy ? poEntryAxy.orders : []), ...(poEntry9 ? poEntry9.orders : [])];
+      const hasOverdue    = !!((poEntryAxy && poEntryAxy.hasOverdue) || (poEntry9 && poEntry9.hasOverdue));
       const buyKg        = Math.max(0, totalProdKg - poolKg);
       const stillToBuyKg = Math.max(0, buyKg - incomingKg);
       const buySacks     = buyKg       > 0 ? Math.ceil(buyKg       / sackKg) : 0;
@@ -2512,8 +2530,8 @@ async function buildWochenplanungData(reqDays) {
           buyKg:        +buyKg.toFixed(1),
           buySacks,
           incomingKg:   +incomingKg.toFixed(1),
-          incomingOrders: poEntry ? poEntry.orders : [],
-          hasOverdue:   poEntry ? poEntry.hasOverdue : false,
+          incomingOrders,
+          hasOverdue,
           stillToBuyKg: +stillToBuyKg.toFixed(1),
           stillBuySacks,
           rohwareReichweiteTage,

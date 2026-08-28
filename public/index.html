@@ -1995,7 +1995,10 @@ function renderWochenplanung(d, buyback) {
     const fmtKg = v => v != null ? v.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—';
 
     const orderLine = o => {
-      const label = `${o.poNr}: ${o.menge} kg (${statusLabel(o.status)}${o.liefdat ? ', erw. ' + o.liefdat : ''})`;
+      const mengeLabel = o.einheitOriginal && o.einheitOriginal.toLowerCase() !== 'kg'
+        ? `${o.mengeOriginal} ${o.einheitOriginal} = ${o.menge} kg`
+        : `${o.menge} kg`;
+      const label = `${o.poNr}: ${mengeLabel} (${statusLabel(o.status)}${o.liefdat ? ', erw. ' + o.liefdat : ''})`;
       return o.overdue
         ? `<span style="color:var(--danger);font-weight:700">⚠ ${label} — überfällig</span>`
         : label;
