@@ -266,6 +266,16 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .sync-hint { font-size:0.72rem; color:var(--muted); line-height:1.4; }
 
 /* ── Wochenplanung ── */
+.wp-tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:20px; flex-wrap:wrap; overflow-x:auto; }
+.wp-tab { padding:11px 18px; font-size:0.85rem; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; display:flex; align-items:center; gap:8px; white-space:nowrap; transition:color 0.15s; }
+.wp-tab:hover { color:var(--text); }
+.wp-tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+.wp-tab-badge { background:var(--surface2); color:var(--muted); font-size:0.72rem; font-weight:700; padding:1px 8px; border-radius:20px; }
+.wp-tab.active .wp-tab-badge { background:var(--accent); color:#fff; }
+.wp-tab-badge.urgent { background:rgba(185,64,64,0.15); color:var(--danger); }
+.wp-tab.active .wp-tab-badge.urgent { background:var(--danger); color:#fff; }
+.wp-tabpanel { display:none; }
+.wp-tabpanel.active { display:block; }
 .wp-section { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); margin-bottom:20px; overflow:hidden; }
 .wp-section-header { padding:12px 20px; background:var(--accent); color:#fff; display:flex; align-items:center; gap:10px; }
 .wp-section-header h3 { font-size:0.85rem; font-weight:700; letter-spacing:0.04em; margin:0; color:#fff; }
@@ -303,13 +313,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     <p>Forecast & Planning</p>
   </div>
   <div class="nav">
-    <div class="nav-item active" onclick="showView('dashboard')">
+    <div class="nav-item" onclick="showView('dashboard')">
       <span class="icon">📊</span> Dashboard
     </div>
     <div class="nav-item" onclick="showView('sync')">
       <span class="icon">🔄</span> Sync
     </div>
-    <div class="nav-item" onclick="showView('wochen')">
+    <div class="nav-item active" onclick="showView('wochen')">
       <span class="icon">📋</span> Wochenplanung
     </div>
     <div class="nav-item" onclick="showView('planung')">
@@ -409,8 +419,8 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 
           <hr style="border-color:var(--border);margin:20px 0">
 
-          <button class="btn-primary" onclick="showView('dashboard')" style="width:100%;margin-bottom:10px">
-            Weiter zum Dashboard
+          <button class="btn-primary" onclick="showView('wochen')" style="width:100%;margin-bottom:10px">
+            Weiter zur Wochenplanung
           </button>
           <div id="setupResult" style="margin-top:12px; font-size:0.85rem;"></div>
         </div>
@@ -645,7 +655,7 @@ async function init() {
         ' ' + d.toLocaleTimeString('de-DE', { hour:'2-digit', minute:'2-digit' });
     }
     if (cfg.configured) {
-      showView('dashboard');
+      showView('wochen');
       testShopify(true); // silent test
     } else {
       showView('setup');
@@ -1822,6 +1832,7 @@ function renderWochenplanung(d, buyback) {
         ? '<div style="font-size:0.68rem;color:var(--muted)">Amazon-Vorschlag</div>' : '';
       return `<tr>
         <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div>${srcTag}</td>
+        <td style="text-align:right">${fba.fbaVelocity > 0 ? fba.fbaVelocity.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
         <td style="text-align:right">${fmt(fba.fbaStock)}${fba.fbaReserved > 0 ? '<div style="font-size:0.73rem;color:var(--muted)">+' + fmt(fba.fbaReserved) + ' reserv.</div>' : ''}</td>
         <td style="text-align:right;${daysColor}">${fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : '—'}</td>
         <td style="text-align:right${fba.enRoute > 0 ? ';color:var(--success);font-weight:700' : ''}">${fba.enRoute > 0 ? fmt(fba.enRoute) : '—'}</td>
@@ -1835,12 +1846,13 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">✈️</span>
-        <h3>1. Versenden an Amazon (Transit → FBA)</h3>
+        <h3>Versand an Amazon (Transit → FBA)</h3>
         <span class="wp-badge">${fbaVersenden.length} Produkt${fbaVersenden.length !== 1 ? 'e' : ''}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
+          <th style="text-align:right">Ø Verkauf/Tag</th>
           <th style="text-align:right">FBA Bestand</th>
           <th style="text-align:right">Reichweite</th>
           <th style="text-align:right">Unterwegs zu Amazon</th>
@@ -1851,6 +1863,16 @@ function renderWochenplanung(d, buyback) {
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
+    </div>`;
+  } else {
+    section1 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">✈️</span>
+        <h3>Versand an Amazon (Transit → FBA)</h3>
+        <span class="wp-badge">0 Produkte</span>
+      </div>
+      <div class="wp-empty">Aktuell nichts zu versenden.</div>
     </div>`;
   }
 
@@ -1870,6 +1892,7 @@ function renderWochenplanung(d, buyback) {
       const rwColor = fba.transitUrgent ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
       return `<tr>
         <td><strong>${fba.skuBase}</strong>${fba.transitUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
+        <td style="text-align:right">${fba.fbaVelocity > 0 ? fba.fbaVelocity.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
         <td style="text-align:right;${rwColor}">${rwLabel}</td>
         <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
         <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
@@ -1884,13 +1907,14 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">🏭</span>
-        <h3>2. Produzieren für FBA Transit</h3>
+        <h3>Produktion für Amazon FBA (Transit)</h3>
         <span class="wp-badge">${fbaProd.length} Produkt${fbaProd.length !== 1 ? 'e' : ''}</span>
         ${d.summary.transitDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.transitDringend} unter Pipeline-Min</span>` : ''}
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
+          <th style="text-align:right">Ø Verkauf/Tag</th>
           <th style="text-align:right">Transit-Reichweite</th>
           <th style="text-align:right">Noch benötigt (netto)</th>
           <th style="text-align:right">Transit bereit</th>
@@ -1903,6 +1927,16 @@ function renderWochenplanung(d, buyback) {
         <tbody>${rows}</tbody>
       </table></div>
     </div>`;
+  } else {
+    section2 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🏭</span>
+        <h3>Produktion für Amazon FBA (Transit)</h3>
+        <span class="wp-badge">0 Produkte</span>
+      </div>
+      <div class="wp-empty">Kein FBA-Produktionsbedarf im aktuellen Zeitraum.</div>
+    </div>`;
   }
 
   // ── Sektion 3: Transfer aus MAIN-Lager (FBM-Überbestand → Transitlager) ────
@@ -1910,28 +1944,49 @@ function renderWochenplanung(d, buyback) {
   const fbaTransfer = fbaEntries.filter(e => e.fba.fromFbm > 0);
   let section2b = '';
   if (fbaTransfer.length) {
-    const rows = fbaTransfer.map(({ f, fba }) => `<tr>
+    const rows = fbaTransfer.map(({ f, fba }) => {
+      const p5 = f.fbmProduction.find(p => p.sku === fba.skuBase);
+      const rwColor = !p5 || p5.reichweiteWochen === null ? 'color:var(--muted)'
+        : p5.reichweiteWochen < d.period.targetWeeks * 0.5 ? 'color:var(--danger);font-weight:700'
+        : p5.reichweiteWochen < d.period.targetWeeks       ? 'color:var(--warn);font-weight:700'
+        : 'color:var(--success)';
+      return `<tr>
         <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="text-align:right">${fmt(fba.mainAvail)} Stk.</td>
+        <td style="text-align:right">${p5 && p5.velocityPW > 0 ? p5.velocityPW.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
+        <td style="text-align:right;${rwColor}">${p5 && p5.reichweiteWochen !== null ? p5.reichweiteWochen.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
         <td style="text-align:right;color:var(--success);font-weight:700">${fmt(fba.fromFbm)} Stk.</td>
         <td style="text-align:right">${fmt(fba.fbmMinQty)} Stk.${fba.fbmMinSource === 'fallback' ? ' <span style="font-size:0.65rem;color:var(--warn)">⚠ Schätzwert</span>' : ''}</td>
-      </tr>`).join('');
+      </tr>`;
+    }).join('');
     section2b = `
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">🔄</span>
-        <h3>3. Transfer aus MAIN-Lager (→ Transitlager)</h3>
+        <h3>Umlagerung aus MAIN-Lager (→ Transitlager)</h3>
         <span class="wp-badge">${fbaTransfer.length} Produkt${fbaTransfer.length !== 1 ? 'e' : ''}</span>
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
           <th>Produkt</th>
           <th style="text-align:right">MAIN Bestand</th>
+          <th style="text-align:right">Ø/Woche</th>
+          <th style="text-align:right">Reichweite</th>
           <th style="text-align:right">Umpacken für FBA</th>
           <th style="text-align:right">FBM-Mindestbestand (bleibt)</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
+    </div>`;
+  } else {
+    section2b = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🔄</span>
+        <h3>Umlagerung aus MAIN-Lager (→ Transitlager)</h3>
+        <span class="wp-badge">0 Produkte</span>
+      </div>
+      <div class="wp-empty">Kein FBA-Überbestand im MAIN-Lager zum Umlagern.</div>
     </div>`;
   }
 
@@ -1989,7 +2044,7 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">📦</span>
-        <h3>4. Produzieren für FBM (MAIN Lager)</h3>
+        <h3>Produktion für MAIN-Lager (FBM)</h3>
         <span class="wp-badge">${fbmLines.length} SKU${fbmLines.length !== 1 ? 's' : ''}</span>
         ${totalStunden > 0 ? `<span class="wp-badge" style="background:rgba(46,90,125,0.3)">≈ ${totalStunden.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1})} Std. Füllzeit gesamt</span>` : ''}
       </div>
@@ -2011,7 +2066,7 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">📦</span>
-        <h3>4. Produzieren für FBM (MAIN Lager)</h3>
+        <h3>Produktion für MAIN-Lager (FBM)</h3>
         <span class="wp-badge">0 SKUs</span>
       </div>
       <div class="wp-empty">Kein FBM-Produktionsbedarf im aktuellen Zeitraum.</div>
@@ -2050,10 +2105,12 @@ function renderWochenplanung(d, buyback) {
         : '—';
       const rwColor = e.rohwareUrgent ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
       const rwLabel = e.rohwareReichweiteTage !== null ? e.rohwareReichweiteTage + ' Tage' : '—';
+      const kgPerWeek = d.period.weeks > 0 ? e.totalProdKg / d.period.weeks : 0;
       return `<tr>
         <td><strong>${f.rohwareNr}</strong>${e.rohwareUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="font-size:0.82rem">${f.familyKey}</td>
         <td style="text-align:right">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmtKg(f.rawKg) + ' KG lose' : ''} / ${fmtKg(f.poolKg)} KG</td>
+        <td style="text-align:right">${kgPerWeek > 0 ? fmtKg(kgPerWeek) + ' KG' : '—'}</td>
         <td style="text-align:right;${rwColor}">${rwLabel}</td>
         <td style="text-align:right">${fmtKg(e.totalProdKg)} KG${e.direct9Kg > 0 ? `<div style="font-size:0.7rem;color:var(--muted)">davon ${fmtKg(e.direct9Kg)} KG Direktverkauf ${f.sack9Sku}</div>` : ''}</td>
         <td style="text-align:right">${e.incomingKg > 0
@@ -2090,7 +2147,7 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">🛒</span>
-        <h3>5. Einkaufen (Rohware)</h3>
+        <h3>Einkauf (Rohware)</h3>
         ${kaufenFam.length > 0
           ? `<span class="wp-badge">${kaufenFam.length} offen</span>`
           : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Alles gedeckt</span>`}
@@ -2101,7 +2158,8 @@ function renderWochenplanung(d, buyback) {
       ${kaufenFam.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>
           <th>Rohware (AXY)</th><th>Familie</th>
-          <th style="text-align:right">-9 Pool</th>
+          <th style="text-align:right">-9 Pool (Bestand)</th>
+          <th style="text-align:right">Ø KG/Woche</th>
           <th style="text-align:right">Reichweite</th>
           <th style="text-align:right">Produktionsbedarf</th>
           <th style="text-align:right">Im Zulauf</th>
@@ -2115,46 +2173,8 @@ function renderWochenplanung(d, buyback) {
     </div>`;
   }
 
-  // ── Sektion 5: Reichweiten Übersicht ───────────────────────────────────────
-  const overviewRows = d.families.map(f => {
-    const fba = f.fba;
-    const p5  = f.fbmProduction.find(p => p.sku === f.familyKey + '-5');
-    const mainRw = p5 && p5.reichweiteWochen !== null ? p5.reichweiteWochen : null;
-    const mainColor = mainRw === null ? 'color:var(--muted)'
-      : mainRw < d.period.targetWeeks * 0.5 ? 'color:var(--danger);font-weight:700'
-      : mainRw < d.period.targetWeeks ? 'color:var(--warn);font-weight:700'
-      : 'color:var(--success)';
-    const fbaColor = !fba ? '' : fba.fbaDaysLeft < 21 ? 'color:var(--danger);font-weight:700'
-      : fba.fbaDaysLeft < 42 ? 'color:var(--warn);font-weight:700'
-      : 'color:var(--success)';
-    const pool9Color = f.sack9Stock <= 1 ? 'color:var(--warn);font-weight:700' : '';
-    return `<tr>
-      <td><strong>${f.familyKey}</strong></td>
-      <td style="text-align:right;${pool9Color}">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmt(f.rawKg) + ' KG lose' : ''} / ${fmt(f.poolKg)} KG</td>
-      <td style="text-align:right;${mainColor}">${mainRw !== null ? mainRw.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
-      <td style="text-align:right">${fba ? fmt(fba.transitAvail) + ' Stk.' : '—'}</td>
-      <td style="text-align:right;${fbaColor}">${fba && fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : fba ? fmt(fba.fbaStock) + ' Stk.' : '—'}</td>
-    </tr>`;
-  }).join('');
-
-  const section5 = `
-    <div class="wp-section">
-      <div class="wp-section-header">
-        <span style="font-size:1.1rem">📊</span>
-        <h3>6. Reichweiten Übersicht</h3>
-        <span class="wp-badge">${d.families.length} Familien</span>
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr>
-          <th>Familie</th>
-          <th style="text-align:right">-9 Pool (Säcke/KG)</th>
-          <th style="text-align:right">MAIN FBM (Wo.)</th>
-          <th style="text-align:right">Transit</th>
-          <th style="text-align:right">Amazon FBA (Tage)</th>
-        </tr></thead>
-        <tbody>${overviewRows || '<tr><td colspan="5" class="wp-empty">Keine Familien — bitte Stücklisten-Mapping hochladen.</td></tr>'}</tbody>
-      </table></div>
-    </div>`;
+  // Reichweiten-Übersicht als eigene Sektion entfällt — Reichweite/Ø-Verkauf/
+  // Bestand stehen jetzt direkt in jedem der 5 Tabs (siehe oben).
 
   // ── Sektion 7: Buyback Options ──────────────────────────────────────────────
   // Rohware mit Überreichweite (> buyback.period.minMonths Monate bei echter
@@ -2189,7 +2209,7 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">♻️</span>
-        <h3>7. Buyback Options</h3>
+        <h3>Buyback Options</h3>
         ${buyback.candidates.length > 0
           ? `<span class="wp-badge">${buyback.candidates.length} Kandidaten</span>`
           : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Keine Überreichweite</span>`}
@@ -2214,14 +2234,40 @@ function renderWochenplanung(d, buyback) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">♻️</span>
-        <h3>7. Buyback Options</h3>
+        <h3>Buyback Options</h3>
       </div>
       <div class="wp-empty">Chargen-Import fehlt — bitte den Stock-Lots-Export hochladen, um Buyback-Kandidaten zu sehen.</div>
     </div>`;
   }
 
+  // ── Tabs: upstream → downstream (Einkauf zuerst — hier beginnt der Bedarf,
+  // alles danach ist Folge davon), feste Reihenfolge, Buyback am Ende (eigener
+  // Rhythmus, kein wöchentlicher Handlungsbedarf wie die anderen 5).
+  const wpTabs = [
+    { key: 'einkauf',    label: 'Einkauf',           icon: '🛒', content: section4,  count: kaufenFam.length,    urgent: d.summary.rohwareDringend > 0 },
+    { key: 'umlagerung', label: 'Umlagerung',        icon: '🔄', content: section2b, count: fbaTransfer.length },
+    { key: 'prod-main',  label: 'Produktion Main',   icon: '📦', content: section3,  count: fbmLines.length },
+    { key: 'prod-fba',   label: 'Produktion FBA',    icon: '🏭', content: section2,  count: fbaProd.length,      urgent: d.summary.transitDringend > 0 },
+    { key: 'versand',    label: 'Versand',           icon: '✈️', content: section1,  count: fbaVersenden.length },
+    { key: 'buyback',    label: 'Buyback',           icon: '♻️', content: section6,  count: buyback?.candidates?.length || 0 },
+  ];
+
+  const tabBar = wpTabs.map((t, i) => `
+    <div class="wp-tab${i === 0 ? ' active' : ''}" data-wptab="${t.key}" onclick="switchWpTab('${t.key}')">
+      <span>${t.icon}</span> ${t.label}
+      <span class="wp-tab-badge${t.urgent ? ' urgent' : ''}">${t.count}</span>
+    </div>`).join('');
+
+  const tabPanels = wpTabs.map((t, i) => `
+    <div class="wp-tabpanel${i === 0 ? ' active' : ''}" id="wptab-${t.key}">${t.content}</div>`).join('');
+
   document.getElementById('wochenContent').innerHTML =
-    metaBar + summaryCards + section1 + section2 + section2b + section3 + section4 + section5 + section6;
+    metaBar + summaryCards + `<div class="wp-tabs">${tabBar}</div>` + tabPanels;
+}
+
+function switchWpTab(key) {
+  document.querySelectorAll('.wp-tab').forEach(el => el.classList.toggle('active', el.dataset.wptab === key));
+  document.querySelectorAll('.wp-tabpanel').forEach(el => el.classList.toggle('active', el.id === 'wptab-' + key));
 }
 
 // ─── FBA Planung ──────────────────────────────────────────────────────────────
