@@ -295,6 +295,15 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .sync-drop input[type=file] { display:none; }
 .sync-hint { font-size:0.72rem; color:var(--muted); line-height:1.4; }
 
+/* ── Alle SKUs ── */
+.sku-chip { padding:6px 12px; border-radius:20px; border:1px solid var(--border); font-size:0.8rem; color:var(--muted); cursor:pointer; user-select:none; transition:all 0.15s; white-space:nowrap; }
+.sku-chip:hover { border-color:var(--accent2); color:var(--text); }
+.sku-chip.active { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+.sku-todo-tag { display:inline-block; padding:3px 9px; border-radius:14px; background:var(--surface2); color:var(--text); font-size:0.74rem; cursor:pointer; margin:2px; white-space:nowrap; transition:background 0.15s; }
+.sku-todo-tag:hover { background:var(--accent2); }
+.sku-todo-tag.urgent { background:rgba(185,64,64,0.12); color:var(--danger); font-weight:600; }
+.sku-todo-tag.urgent:hover { background:rgba(185,64,64,0.25); }
+
 /* ── Wochenplanung ── */
 .wp-tabs { display:flex; gap:2px; border-bottom:2px solid var(--border); margin-bottom:20px; flex-wrap:wrap; overflow-x:auto; }
 .wp-tab { padding:11px 18px; font-size:0.85rem; font-weight:600; color:var(--muted); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-2px; display:flex; align-items:center; gap:8px; white-space:nowrap; transition:color 0.15s; }
@@ -354,6 +363,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     </div>
     <div class="nav-item active" onclick="showView('wochen')">
       <span class="icon">📋</span> Wochenplanung
+    </div>
+    <div class="nav-item" onclick="showView('skumain')">
+      <span class="icon">🗂️</span> Alle SKUs
     </div>
     <div class="nav-item" onclick="showView('planung')">
       <span class="icon">📦</span> Planung
@@ -475,6 +487,13 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       <p class="sync-intro">Übersicht aller Datenquellen aus MRPeasy und Sellerboard. Datei hierher ziehen oder auf die Fläche klicken, um sie neu zu importieren — jede Karte zeigt, wie aktuell ihre Daten sind.</p>
       <div id="syncContent">
         <div class="loading-overlay"><div class="spinner"></div>Lade Status…</div>
+      </div>
+    </div>
+
+    <!-- ─── ALLE SKUS VIEW ─── -->
+    <div class="view" id="view-skumain">
+      <div id="skuMainContent">
+        <div class="loading-overlay"><div class="spinner"></div>Lade SKU-Übersicht…</div>
       </div>
     </div>
 
@@ -623,6 +642,7 @@ function onPeriodChange(val) {
   dashData = null; artikelData = null;
   if (currentView === 'dashboard') loadDashboard();
   else if (currentView === 'wochen')   loadWochenplanung();
+  else if (currentView === 'skumain')  loadSkuMain();
   else if (currentView === 'planung')  loadPlanung();
   else if (currentView === 'artikel')  loadArtikel();
 }
@@ -651,6 +671,7 @@ const viewTitles = {
   setup: 'Einrichtung', dashboard: 'Dashboard',
   sync: 'Sync',
   wochen: 'Wochenplanung',
+  skumain: 'Alle SKUs',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
   lager: 'Lagerübersicht', fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
   log: 'Update-Protokoll', settings: 'Einstellungen'
@@ -678,16 +699,21 @@ function showView(name) {
   currentView = name;
   closeSidebar(); // Navigation auf Mobile schließt das Off-Canvas-Menü automatisch
 
-  if (name === 'dashboard' && !dashData) loadDashboard();
-  if (name === 'sync')       loadSyncStatus();
-  if (name === 'wochen')     loadWochenplanung();
-  if (name === 'planung')    loadPlanung();
-  if (name === 'artikel')    loadArtikel();
-  if (name === 'lager')      loadLagerbestand();
-  if (name === 'fba')        loadFbaPlanung();
-  if (name === 'aktiv')      loadAktiveArtikel();
-  if (name === 'log')        loadLog();
-  if (name === 'settings')   loadSettings();
+  // Promise zurückgeben, damit z.B. der Tag-Klick in "Alle SKUs" abwarten kann,
+  // bis die Wochenplanung-Tabs im DOM stehen, bevor er den Tab umschaltet.
+  let loadPromise;
+  if (name === 'dashboard' && !dashData) loadPromise = loadDashboard();
+  if (name === 'sync')       loadPromise = loadSyncStatus();
+  if (name === 'wochen')     loadPromise = loadWochenplanung();
+  if (name === 'skumain')    loadPromise = loadSkuMain();
+  if (name === 'planung')    loadPromise = loadPlanung();
+  if (name === 'artikel')    loadPromise = loadArtikel();
+  if (name === 'lager')      loadPromise = loadLagerbestand();
+  if (name === 'fba')        loadPromise = loadFbaPlanung();
+  if (name === 'aktiv')      loadPromise = loadAktiveArtikel();
+  if (name === 'log')        loadPromise = loadLog();
+  if (name === 'settings')   loadPromise = loadSettings();
+  return loadPromise || Promise.resolve();
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
@@ -2315,6 +2341,151 @@ function renderWochenplanung(d, buyback) {
 function switchWpTab(key) {
   document.querySelectorAll('.wp-tab').forEach(el => el.classList.toggle('active', el.dataset.wptab === key));
   document.querySelectorAll('.wp-tabpanel').forEach(el => el.classList.toggle('active', el.id === 'wptab-' + key));
+}
+
+// Von anderswo (z.B. "Alle SKUs") in einen bestimmten Wochenplanung-Tab springen —
+// wartet auf den Datenload, sonst existieren die Tab-Elemente noch nicht im DOM.
+async function jumpToWpTab(tabKey) {
+  await showView('wochen');
+  switchWpTab(tabKey);
+  document.querySelector('.wp-tabs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ─── Alle SKUs (SKU-Hauptansicht mit ToDo-Tags) ────────────────────────────────
+// Kein eigener Server-Endpunkt: baut die ToDo-Tags direkt aus denselben Daten,
+// die auch die Wochenplanung-Tabs zeigen (buildSkuTodoMap), damit garantiert
+// dieselben Zahlen/Kriterien gelten und nichts doppelt gepflegt werden muss.
+const SKU_TODO_DEFS = {
+  einkauf:     { label: 'Einkauf',          icon: '🛒', tabKey: 'einkauf' },
+  umlagerung:  { label: 'Umlagerung',       icon: '🔄', tabKey: 'umlagerung' },
+  'prod-main': { label: 'Produktion Main',  icon: '📦', tabKey: 'prod-main' },
+  'prod-fba':  { label: 'Produktion FBA',   icon: '🏭', tabKey: 'prod-fba' },
+  versand:     { label: 'Versand',          icon: '✈️', tabKey: 'versand' },
+  buyback:     { label: 'Buyback',          icon: '♻️', tabKey: 'buyback' },
+};
+
+function buildSkuTodoMap(d, buyback) {
+  const map = {}; // SKU → [{ key, urgent }]
+  const add = (sku, key, urgent) => {
+    if (!sku) return;
+    if (!map[sku]) map[sku] = [];
+    if (!map[sku].some(t => t.key === key)) map[sku].push({ key, urgent: !!urgent });
+  };
+
+  for (const f of d.families || []) {
+    // Einkauf/Buyback hängen bewusst nur an der -9-SKU (das ist die tatsächlich
+    // eingekaufte/rückgabefähige Einheit seit dem Umstieg auf Direkteinkauf).
+    if (f.einkauf.stillBuySacks > 0) add(f.sack9Sku, 'einkauf', f.einkauf.rohwareUrgent);
+    else if (f.einkauf.poolEmpty)    add(f.sack9Sku, 'einkauf', false);
+
+    for (const p of f.fbmProduction || [])
+      if (p.prodNeed > 0) add(p.sku, 'prod-main', false);
+
+    for (const fba of f.fbaAll || []) {
+      if (fba.fromFbm > 0)        add(fba.skuBase, 'umlagerung', false);
+      if (fba.newProd > 0)        add(fba.skuBase, 'prod-fba', fba.transitUrgent);
+      if (fba.recommendation > 0) add(fba.skuBase, 'versand', fba.fbaDaysLeft > 0 && fba.fbaDaysLeft < 21);
+    }
+  }
+  for (const c of (buyback && buyback.candidates) || []) add(c.sack9Sku, 'buyback', false);
+
+  return map;
+}
+
+let skuMainRows = null;
+const skuMainFilter = { phases: new Set(), typ: null, onlyTodo: false, q: '' };
+
+async function loadSkuMain() {
+  document.getElementById('skuMainContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade SKU-Übersicht…</div>';
+  try {
+    const [artData, wpData, buyback] = await Promise.all([
+      api('/articles'),
+      api('/wochenplanung?days=' + getPeriodDays()),
+      api('/buyback?days=' + getPeriodDays()).catch(() => null),
+    ]);
+    const todoMap = buildSkuTodoMap(wpData, buyback);
+    skuMainRows = Object.values(artData.items || {})
+      .filter(a => a.group === 'Fertigware' && a.active)
+      .map(a => ({
+        sku: a.nr, name: a.name, bestand: a.available,
+        typ: /-9$/.test(a.nr) ? 'Herstellergebinde' : 'Fertigware',
+        todos: todoMap[a.nr] || [],
+      }))
+      .sort((a, b) => a.sku.localeCompare(b.sku, 'de'));
+    renderSkuMain();
+  } catch (e) {
+    document.getElementById('skuMainContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
+  }
+}
+
+function renderSkuMain() {
+  if (!skuMainRows) return;
+  const f = skuMainFilter;
+  const rows = skuMainRows.filter(r => {
+    if (f.typ && r.typ !== f.typ) return false;
+    if (f.onlyTodo && r.todos.length === 0) return false;
+    if (f.phases.size > 0 && !r.todos.some(t => f.phases.has(t.key))) return false;
+    if (f.q && !(r.sku.toLowerCase().includes(f.q) || r.name.toLowerCase().includes(f.q))) return false;
+    return true;
+  });
+
+  const phaseChips = Object.entries(SKU_TODO_DEFS).map(([key, def]) => `
+    <div class="sku-chip${f.phases.has(key) ? ' active' : ''}" onclick="toggleSkuPhaseFilter('${key}')">${def.icon} ${def.label}</div>
+  `).join('');
+
+  const typChips = ['Fertigware', 'Herstellergebinde'].map(t => `
+    <div class="sku-chip${f.typ === t ? ' active' : ''}" onclick="toggleSkuTypFilter('${t}')">${t}</div>
+  `).join('');
+
+  const tableRows = rows.map(r => `
+    <tr>
+      <td><strong>${r.sku}</strong></td>
+      <td style="font-size:0.85rem">${r.name}</td>
+      <td style="text-align:center"><span class="badge badge-muted">${r.typ === 'Herstellergebinde' ? '📦 Herstellergebinde' : 'Fertigware'}</span></td>
+      <td style="text-align:right">${r.bestand.toLocaleString('de')}</td>
+      <td>${r.todos.length
+        ? r.todos.map(t => `<span class="sku-todo-tag${t.urgent ? ' urgent' : ''}" onclick="jumpToWpTab('${SKU_TODO_DEFS[t.key].tabKey}')">${SKU_TODO_DEFS[t.key].icon} ${SKU_TODO_DEFS[t.key].label}</span>`).join(' ')
+        : '<span style="color:var(--muted)">—</span>'}</td>
+    </tr>`).join('');
+
+  document.getElementById('skuMainContent').innerHTML = `
+    <div class="table-box" style="padding:16px 20px;margin-bottom:16px">
+      <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:center">
+        <input type="text" placeholder="SKU oder Name suchen…" value="${f.q}" oninput="setSkuSearch(this.value)" style="max-width:240px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${typChips}</div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:0.82rem;color:var(--muted);cursor:pointer">
+          <input type="checkbox" ${f.onlyTodo ? 'checked' : ''} onchange="toggleSkuOnlyTodo(this.checked)"> Nur mit ToDo
+        </label>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">${phaseChips}</div>
+    </div>
+    <div class="table-box">
+      <div class="table-box-header"><h3>Alle SKUs</h3><span style="font-size:0.78rem;color:var(--muted)">${rows.length} von ${skuMainRows.length}</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr>
+          <th>SKU</th><th>Produktname</th><th style="text-align:center">Typ</th>
+          <th style="text-align:right">Bestand</th><th>ToDo</th>
+        </tr></thead>
+        <tbody>${tableRows || '<tr><td colspan="5" class="wp-empty">Keine SKUs für diesen Filter.</td></tr>'}</tbody>
+      </table></div>
+    </div>`;
+}
+
+function toggleSkuPhaseFilter(key) {
+  if (skuMainFilter.phases.has(key)) skuMainFilter.phases.delete(key); else skuMainFilter.phases.add(key);
+  renderSkuMain();
+}
+function toggleSkuTypFilter(typ) {
+  skuMainFilter.typ = skuMainFilter.typ === typ ? null : typ;
+  renderSkuMain();
+}
+function toggleSkuOnlyTodo(checked) {
+  skuMainFilter.onlyTodo = checked;
+  renderSkuMain();
+}
+function setSkuSearch(val) {
+  skuMainFilter.q = val.toLowerCase();
+  renderSkuMain();
 }
 
 // ─── FBA Planung ──────────────────────────────────────────────────────────────
