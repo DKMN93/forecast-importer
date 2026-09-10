@@ -2170,7 +2170,7 @@ function renderWochenplanung(d, buyback) {
     // Kompakte Info-Zeile: bereits gedeckt durch PO
     const gedecktInfo = gedecktFam.length ? `
       <div style="padding:10px 20px;font-size:0.78rem;color:var(--muted);border-top:1px solid var(--border);background:var(--surface2)">
-        ✓ Bereits gedeckt durch offene Bestellungen: ${gedecktFam.map(f => `<strong>${f.rohwareNr}</strong> (${fmtKg(f.einkauf.incomingKg)} KG im Zulauf)`).join(' · ')}
+        ✓ Bereits gedeckt durch offene Bestellungen: ${gedecktFam.map(f => `<strong>${f.rohwareNr}</strong> ${f.rohwareName} (${fmtKg(f.einkauf.incomingKg)} KG im Zulauf)`).join(' · ')}
       </div>` : '';
 
     // Warnbanner: überfällige Bestellungen über ALLE Familien (auch bereits "gedeckte")
@@ -2179,7 +2179,7 @@ function renderWochenplanung(d, buyback) {
     const overdueBanner = overdueOrders.length ? `
       <div style="padding:10px 20px;font-size:0.78rem;color:var(--danger);border-top:1px solid var(--border);background:rgba(200,60,60,0.08)">
         ⚠ <strong>${overdueOrders.length} überfällige Bestellung${overdueOrders.length !== 1 ? 'en' : ''}</strong> — Lieferant nachfassen:
-        ${overdueOrders.map(({ f, o }) => `<strong>${f.rohwareNr}</strong> ${o.poNr} (${o.menge} kg, erw. ${o.liefdat})`).join(' · ')}
+        ${overdueOrders.map(({ f, o }) => `<strong>${f.rohwareNr}</strong> ${f.rohwareName} — ${o.poNr} (${o.menge} kg, erw. ${o.liefdat})`).join(' · ')}
       </div>` : '';
 
     // Warnbanner: Rohware-Pool leer, aber kein Kaufvorschlag (Downstream-Bestand
@@ -2187,7 +2187,7 @@ function renderWochenplanung(d, buyback) {
     const poolLeerBanner = poolLeerFam.length ? `
       <div style="padding:10px 20px;font-size:0.78rem;color:var(--warn);border-top:1px solid var(--border);background:rgba(200,150,60,0.08)">
         ⚠ <strong>${poolLeerFam.length} Rohware-Pool${poolLeerFam.length !== 1 ? 's' : ''} leer</strong> (kein akuter Kaufvorschlag, aber kein Puffer mehr — Downstream-Bestand deckt den Ziel-Zeitraum noch):
-        ${poolLeerFam.map(f => `<strong>${f.rohwareNr}</strong> ${f.familyKey}`).join(' · ')}
+        ${poolLeerFam.map(f => `<strong>${f.rohwareNr}</strong> ${f.rohwareName} (${f.familyKey})`).join(' · ')}
       </div>` : '';
 
     section4 = `
