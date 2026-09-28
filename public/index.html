@@ -2025,7 +2025,7 @@ function renderWochenplanung(d, buyback) {
         : 'color:var(--success)';
       return `<tr>
         <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right">${fmt(fba.mainAvail)} Stk.</td>
+        <td style="text-align:right">${fmt(fba.mainAvail)} Stk.${fba.mainExpiredStk > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">− ${fmt(fba.mainExpiredStk)} abgelaufen</div>` : ''}</td>
         <td style="text-align:right">${p5 && p5.velocityPW > 0 ? p5.velocityPW.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
         <td style="text-align:right;${rwColor}">${p5 && p5.reichweiteWochen !== null ? p5.reichweiteWochen.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
         <td style="text-align:right;color:var(--success);font-weight:700">${fmt(fba.fromFbm)} Stk.</td>
@@ -2103,7 +2103,7 @@ function renderWochenplanung(d, buyback) {
         tableRows += `<tr>
           <td><strong>${p.sku}</strong></td>
           <td style="text-align:center"><span class="badge badge-muted">${p.abfuellklasse || '—'}</span></td>
-          <td style="text-align:right">${fmt(p.current)}</td>
+          <td style="text-align:right">${fmt(p.current)}${p.expiredStk > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">− ${fmt(p.expiredStk)} abgelaufen</div>` : ''}</td>
           <td style="text-align:right">${p.velocityPW > 0 ? p.velocityPW.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
           <td style="text-align:right">${fmt(p.target)}</td>
           <td style="text-align:right;color:var(--danger);font-weight:700">${fmt(p.prodNeed)}</td>
@@ -2182,7 +2182,7 @@ function renderWochenplanung(d, buyback) {
       return `<tr>
         <td><strong>${f.rohwareNr}</strong>${e.rohwareUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
         <td style="font-size:0.82rem">${f.familyKey}</td>
-        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmtKg(f.rawKg) + ' KG lose' : ''} / ${fmtKg(f.poolKg)} KG</td>
+        <td style="text-align:right">${fmt(f.sack9Stock)} Säcke${f.rawKg > 0 ? ' + ' + fmtKg(f.rawKg) + ' KG lose' : ''} / ${fmtKg(f.poolKg)} KG${e.poolExpiredKg > 0 ? `<div style="font-size:0.7rem;color:var(--danger)">− ${fmtKg(e.poolExpiredKg)} KG abgelaufen, ausgeschlossen</div>` : ''}</td>
         <td style="text-align:right">${kgPerWeek > 0 ? fmtKg(kgPerWeek) + ' KG' : '—'}</td>
         <td style="text-align:right;${rwColor}">${rwLabel}</td>
         <td style="text-align:right">${fmtKg(e.totalProdKg)} KG${e.direct9Kg > 0 ? `<div style="font-size:0.7rem;color:var(--muted)">davon ${fmtKg(e.direct9Kg)} KG Direktverkauf ${f.sack9Sku}</div>` : ''}</td>

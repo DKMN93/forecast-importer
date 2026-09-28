@@ -1702,6 +1702,34 @@ function parseDeDate(s) {
   return isNaN(d.getTime()) ? null : d;
 }
 
+// Charge abgelaufen? Kein erfasstes Verfallsdatum gilt konservativ als nicht
+// abgelaufen (fehlender Wert ≠ abgelaufen) — von Buyback UND Wochenplanung
+// genutzt, damit "abgelaufen" überall dieselbe Definition hat.
+function isLotExpired(l, today) {
+  const exp = parseDeDate(l.verfallsdatum);
+  return !!(exp && exp < today);
+}
+
+// Pro SKU die abgelaufene Menge aus dem Chargen-Import (stock-lots.json),
+// getrennt nach Standort-Eimer wie im Stock-Import (/api/upload-stock):
+// "Amazon FBA" wird dort komplett ignoriert (keine Chargen-Sicht bei Amazon
+// möglich, Sellerboard liefert keine MHD-Daten), "Transit Amazon" landet im
+// Transit-Bucket, alles andere (Main site, Lagerorte etc.) im Main-Bucket.
+function computeExpiredStockMaps() {
+  const lots  = (loadStockLots().lots) || {};
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const main = {}, transit = {};
+  for (const [sku, lotArr] of Object.entries(lots)) {
+    for (const l of lotArr) {
+      if (!isLotExpired(l, today)) continue;
+      if (l.standort === 'Amazon FBA') continue;
+      const bucket = l.standort === 'Transit Amazon' ? transit : main;
+      bucket[sku] = (bucket[sku] || 0) + (l.verfuegbar || 0);
+    }
+  }
+  return { main, transit };
+}
+
 app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
@@ -1858,13 +1886,9 @@ async function buildBuybackData(reqDays) {
   const actLotsFor = (sku) => lotsFor(sku).filter(l => ACT_LIEFERANT_MATCH.test(l.lieferant || ''));
 
   // Abgelaufene Chargen sind nicht rückgabefähig — zählen nicht mehr in die
-  // Buyback-Menge. Chargen ohne erfasstes Verfallsdatum gelten konservativ als
-  // gültig (fehlender Wert ≠ abgelaufen).
+  // Buyback-Menge (isLotExpired: gemeinsame Definition mit der Wochenplanung).
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const isLotValid = (l) => {
-    const exp = parseDeDate(l.verfallsdatum);
-    return !exp || exp >= today;
-  };
+  const isLotValid = (l) => !isLotExpired(l, today);
 
   const candidates = [];
   for (const [prefix, rohInfo] of Object.entries(partsMap)) {
@@ -2362,6 +2386,16 @@ async function buildWochenplanungData(reqDays) {
     const poData       = loadPurchaseOrders();
     const poIncoming   = poData.incoming || {};
 
+    // Abgelaufene Chargen dürfen nirgends als verfügbar gelten — weder für den
+    // Einkauf-Pool noch für Produktions-/Versand-Entscheidungen. Nur für Main-
+    // und Transit-Lager möglich, da nur die aus dem MRPeasy-Chargen-Import
+    // (stock-lots.json) stammen; Amazon-FBA-Bestand kommt aus Sellerboard, das
+    // keine Chargen-/MHD-Daten liefert und daher hier unverändert bleibt.
+    const expiredStock = computeExpiredStockMaps();
+    const mainAvailOf     = sku => Math.max(0, ((mainItems[sku]    || {}).available || 0) - (expiredStock.main[sku]     || 0));
+    const transitAvailOf  = sku => Math.max(0, ((transitItems[sku] || {}).available || 0) - (expiredStock.transit[sku]  || 0));
+    const mainExpiredOf   = sku => expiredStock.main[sku] || 0;
+
     // Shopify Demand aggregieren (einmalig vor der Familienloop)
     let lineItems = [];
     if (cfg.shopifyDomain && cfg.shopifyToken) {
@@ -2392,14 +2426,16 @@ async function buildWochenplanungData(reqDays) {
       const sack9Sku  = prefix + '-9';
       const sack9Art  = artItems[sack9Sku];
       const sackKg    = sack9Art ? (sack9Art.weightKg || 25) : 25;
-      const pool9Stk  = (mainItems[sack9Sku] || {}).available || 0;
+      const pool9Stk  = mainAvailOf(sack9Sku);
       // Rohwarenpool = lose Rohware (Artikelnr. A...) + bereits virtuell in
       // -9-Gebinde umproduzierte Ware. Beides ist im Bestellkreislauf
       // äquivalent (Einkauf → sofortige virtuelle Umproduktion in -9), siehe
-      // Planung-Endpunkt (Zeile ~1175), das hier fehlte bisher.
+      // Planung-Endpunkt (Zeile ~1175), das hier fehlte bisher. Beide Seiten
+      // abzüglich abgelaufener Chargen — abgelaufene Ware ist nicht einsetzbar.
       const rawArt    = artItems[rohInfo.rohwareNr];
-      const rawKg     = rawArt ? (rawArt.available || 0) : 0;
+      const rawKg     = Math.max(0, (rawArt ? (rawArt.available || 0) : 0) - mainExpiredOf(rohInfo.rohwareNr));
       const poolKg    = pool9Stk * sackKg + rawKg;
+      const poolExpiredKg = +(mainExpiredOf(sack9Sku) * sackKg + mainExpiredOf(rohInfo.rohwareNr)).toFixed(1);
 
       // Direktverkauf der -9-Großgebinde selbst (z.B. 25kg-Sack B2B/Großhandel
       // über Shopify) — wird sonst nirgends erfasst, weil die sizes-Schleife
@@ -2426,7 +2462,7 @@ async function buildWochenplanungData(reqDays) {
         const totalUnits  = sd.direct + bundleUnits;
         const velocityPW  = weeks > 0 ? totalUnits / weeks : 0;
         const targetStk   = Math.ceil(velocityPW * targetWeeks);
-        const current     = (mainItems[sku] || {}).available || 0;
+        const current     = mainAvailOf(sku);
         const rawNeed     = Math.max(0, targetStk - current);
         const lotSize     = sackKg > 0 && art.weightKg > 0
           ? Math.ceil(sackKg * 1000 / (art.weightKg * 1000))
@@ -2442,6 +2478,7 @@ async function buildWochenplanungData(reqDays) {
           weightKg:        art.weightKg || 0,
           velocityPW:      +velocityPW.toFixed(2),
           current,
+          expiredStk:      mainExpiredOf(sku),
           target:          targetStk,
           rawNeed,
           lotSize,
@@ -2467,8 +2504,8 @@ async function buildWochenplanungData(reqDays) {
 
         const primarySku   = prefix + '-' + sz;
         const art          = artItems[primarySku];
-        const transitAvail = (transitItems[primarySku] || {}).available || 0;
-        const mainAvail    = (mainItems[primarySku]    || {}).available || 0;
+        const transitAvail = transitAvailOf(primarySku);
+        const mainAvail    = mainAvailOf(primarySku);
         // Kein gepflegter Mindestbestand in MRPeasy (minQty=0)? Dann NICHT den
         // kompletten Main-Bestand als "Überbestand" für FBA freigeben — das würde
         // den FBM/Shopify-Sicherheitspuffer leerräumen. Stattdessen Fallback:
@@ -2513,6 +2550,7 @@ async function buildWochenplanungData(reqDays) {
           enRoute,
           atFba,
           mainAvail,
+          mainExpiredStk: mainExpiredOf(primarySku),
           recommendedReorder: fbaItem.recommendedReorder || 0,
           recommendedShipIn:  fbaItem.recommendedShipIn || 0,
           recommendation,
@@ -2585,6 +2623,7 @@ async function buildWochenplanungData(reqDays) {
           direct9Kg:    +direct9Kg.toFixed(1),
           totalProdKg:  +totalProdKg.toFixed(1),
           poolKg:       +poolKg.toFixed(1),
+          poolExpiredKg,
           buyKg:        +buyKg.toFixed(1),
           buySacks,
           incomingKg:   +incomingKg.toFixed(1),
