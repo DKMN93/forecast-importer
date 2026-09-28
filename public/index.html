@@ -2271,7 +2271,7 @@ function renderWochenplanung(d, buyback) {
       return `<tr>
         <td><strong>${c.rohwareNr}</strong><div style="font-size:0.73rem;color:var(--muted)">${c.rohwareName}</div></td>
         <td style="font-size:0.82rem">${c.familyKey}</td>
-        <td style="text-align:right">${bfmtKg(c.actKg)} KG<div style="font-size:0.7rem;color:var(--muted)">von ${bfmtKg(c.poolKg)} KG Pool gesamt</div></td>
+        <td style="text-align:right">${bfmtKg(c.actKg)} KG<div style="font-size:0.7rem;color:var(--muted)">von ${bfmtKg(c.poolKg)} KG Pool gesamt${c.expiredKg > 0 ? `<br><span style="color:var(--danger)">− ${bfmtKg(c.expiredKg)} KG abgelaufen, ausgeschlossen</span>` : ''}</div></td>
         <td style="text-align:right">${c.reichweiteMonate !== null ? c.reichweiteMonate.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Mo.' : '∞ (kein Absatz)'}</td>
         <td style="text-align:right;${mhdColor}">${c.mhdMonateRest !== null ? c.mhdMonateRest.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Mo.' : '—'}<div style="font-size:0.7rem;color:var(--muted)">${c.earliestExpiry ? fmtDate(c.earliestExpiry) : ''}</div></td>
         <td style="font-size:0.75rem;color:var(--muted)">${lotLines}</td>
@@ -2289,7 +2289,7 @@ function renderWochenplanung(d, buyback) {
       </div>
       <div style="padding:8px 20px 0;font-size:0.75rem;color:var(--muted)">
         Rohware-Pool (lose Rohware + -9 Gebinde) mit über ${buyback.period.minMonths} Monaten Reichweite bei aktueller Verkaufsgeschwindigkeit —
-        nur Chargen, die laut Lot-Import nachweislich von Atlantic Chemicals Trading (ACT) stammen und damit rückgabefähig sind.
+        nur Chargen, die laut Lot-Import nachweislich von Atlantic Chemicals Trading (ACT) stammen und noch nicht abgelaufen sind.
       </div>
       ${buyback.candidates.length > 0 ? `<div class="table-wrap"><table>
         <thead><tr>

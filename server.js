@@ -1857,6 +1857,15 @@ async function buildBuybackData(reqDays) {
   const lotsFor = (sku) => (lots[sku] || []).map(l => ({ ...l, sku }));
   const actLotsFor = (sku) => lotsFor(sku).filter(l => ACT_LIEFERANT_MATCH.test(l.lieferant || ''));
 
+  // Abgelaufene Chargen sind nicht rückgabefähig — zählen nicht mehr in die
+  // Buyback-Menge. Chargen ohne erfasstes Verfallsdatum gelten konservativ als
+  // gültig (fehlender Wert ≠ abgelaufen).
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const isLotValid = (l) => {
+    const exp = parseDeDate(l.verfallsdatum);
+    return !exp || exp >= today;
+  };
+
   const candidates = [];
   for (const [prefix, rohInfo] of Object.entries(partsMap)) {
     const nr       = rohInfo.rohwareNr;
@@ -1881,24 +1890,36 @@ async function buildBuybackData(reqDays) {
     // trägt wenigstens eine einzelne Charge nachweislich ACT als Lieferant.
     const artSupplierIsAct = (rawArt   && ACT_LIEFERANT_MATCH.test(rawArt.lieferant   || ''))
                            || (sack9Art && ACT_LIEFERANT_MATCH.test(sack9Art.lieferant || ''));
-    let relevantLots, actKg, matchedVia;
+    let relevantLots, actKg, matchedVia, expiredKg = 0;
     if (artSupplierIsAct) {
-      relevantLots = [...lotsFor(nr), ...lotsFor(sack9Sku)];
-      actKg        = poolKg;
-      matchedVia   = 'artikel';
+      const allLots = [...lotsFor(nr), ...lotsFor(sack9Sku)];
+      if (allLots.length === 0) {
+        // Keine Chargen-Daten für diese SKU erfasst — kann nicht nach MHD
+        // gefiltert werden, vertraut wie bisher dem Artikel-Gesamtbestand.
+        relevantLots = allLots;
+        actKg        = poolKg;
+      } else {
+        relevantLots = allLots.filter(isLotValid);
+        actKg        = relevantLots.reduce((s, l) => s + l.verfuegbar * (l.sku === sack9Sku ? sackKg : 1), 0);
+        expiredKg    = allLots.filter(l => !isLotValid(l))
+          .reduce((s, l) => s + l.verfuegbar * (l.sku === sack9Sku ? sackKg : 1), 0);
+      }
+      matchedVia = 'artikel';
     } else {
-      relevantLots = [...actLotsFor(nr), ...actLotsFor(sack9Sku)];
-      if (relevantLots.length === 0) continue;
+      const allActLots = [...actLotsFor(nr), ...actLotsFor(sack9Sku)];
+      relevantLots = allActLots.filter(isLotValid);
       // Verfügbar (nicht "Auf Lager") — ein Teil der Charge kann bereits für
       // einen laufenden Fertigungsauftrag reserviert ("Gebucht") sein und ist
       // dann nicht frei rückgabefähig.
       actKg      = relevantLots.reduce((s, l) => s + l.verfuegbar * (l.sku === sack9Sku ? sackKg : 1), 0);
+      expiredKg  = allActLots.filter(l => !isLotValid(l))
+        .reduce((s, l) => s + l.verfuegbar * (l.sku === sack9Sku ? sackKg : 1), 0);
       matchedVia = 'charge';
     }
+    if (actKg <= 0) continue; // nichts Rückgabefähiges übrig (z.B. alle Chargen abgelaufen)
 
     const expiries = relevantLots.map(l => parseDeDate(l.verfallsdatum)).filter(Boolean);
     const earliestExpiry = expiries.length ? new Date(Math.min(...expiries.map(d => d.getTime()))) : null;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
     const mhdMonateRest = earliestExpiry ? +((earliestExpiry - today) / (1000 * 60 * 60 * 24 * 30)).toFixed(1) : null;
 
     candidates.push({
@@ -1908,6 +1929,7 @@ async function buildBuybackData(reqDays) {
       sack9Sku,
       poolKg:       +poolKg.toFixed(1),
       actKg:        +actKg.toFixed(1),
+      expiredKg:    +expiredKg.toFixed(1),
       matchedVia,
       verbrauchKgProMonat: +vkgPM.toFixed(1),
       reichweiteMonate,
