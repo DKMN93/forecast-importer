@@ -1831,18 +1831,19 @@ function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce
 async function loadWochenplanung() {
   document.getElementById('wochenContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Wochenplanung…</div>';
   try {
-    const [data, buyback] = await Promise.all([
+    const [data, buyback, abschreiben] = await Promise.all([
       api('/wochenplanung?days=' + getPeriodDays()),
       api('/buyback?days=' + getPeriodDays()).catch(() => null), // optional: Lot-Import evtl. noch nicht hochgeladen
+      api('/abschreiben').catch(() => null),
     ]);
-    renderWochenplanung(data, buyback);
+    renderWochenplanung(data, buyback, abschreiben);
     document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
   } catch (e) {
     document.getElementById('wochenContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
   }
 }
 
-function renderWochenplanung(d, buyback) {
+function renderWochenplanung(d, buyback, abschreiben) {
   const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
   const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : '—';
 
@@ -2313,16 +2314,67 @@ function renderWochenplanung(d, buyback) {
     </div>`;
   }
 
+  // ── Sektion 8: Abschreiben (abgelaufene Chargen — Lager-ToDo) ──────────────
+  let section7 = '';
+  if (abschreiben && abschreiben.items) {
+    const woRows = abschreiben.items.map(it => {
+      const isKg      = (it.unit || '').toLowerCase() === 'kg';
+      const kgEquiv   = !isKg && it.weightKg > 0 ? +(it.aufLager * it.weightKg).toFixed(2) : null;
+      const gebucht   = it.aufLager - it.verfuegbar;
+      const ageColor  = it.tageAbgelaufen > 180 ? 'color:var(--danger);font-weight:700' : 'color:var(--danger)';
+      return `<tr>
+        <td><strong>${it.sku}</strong><div style="font-size:0.73rem;color:var(--muted)">${it.name}</div></td>
+        <td style="text-align:center"><span class="badge badge-muted">${it.group === 'Rohstoffe' ? 'Rohstoff' : 'Fertigware'}</span></td>
+        <td style="font-size:0.82rem">${it.standort || '—'}</td>
+        <td style="font-size:0.82rem">${it.charge}</td>
+        <td style="text-align:right">${fmt(it.aufLager)} ${it.unit || ''}${kgEquiv !== null ? `<div style="font-size:0.7rem;color:var(--muted)">= ${kgEquiv} kg</div>` : ''}${gebucht > 0 ? `<div style="font-size:0.68rem;color:var(--warn)">davon ${fmt(gebucht)} gebucht</div>` : ''}</td>
+        <td style="text-align:right;${ageColor}">${it.tageAbgelaufen} Tage<div style="font-size:0.7rem">seit ${it.verfallsdatum}</div></td>
+      </tr>`;
+    }).join('');
+
+    section7 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🗑️</span>
+        <h3>Abschreiben — abgelaufene Chargen</h3>
+        ${abschreiben.items.length > 0
+          ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${abschreiben.summary.total} Chargen · ${abschreiben.summary.skuCount} SKUs</span>`
+          : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Nichts abgelaufen</span>`}
+      </div>
+      <div style="padding:8px 20px 0;font-size:0.75rem;color:var(--muted)">
+        Chargen-Checkliste fürs Lager: physisch noch vorhandene Chargen mit abgelaufenem MHD, sortiert nach längstem Rückstand zuerst.
+        Verschwindet automatisch aus der Liste, sobald die Charge in MRPeasy abgeschrieben und neu importiert wurde.
+      </div>
+      ${abschreiben.items.length > 0 ? `<div class="table-wrap"><table>
+        <thead><tr>
+          <th>Artikel</th><th style="text-align:center">Typ</th><th>Standort</th><th>Charge</th>
+          <th style="text-align:right">Menge</th><th style="text-align:right">Abgelaufen seit</th>
+        </tr></thead>
+        <tbody>${woRows}</tbody>
+      </table></div>` : '<div class="wp-empty">Keine abgelaufenen Chargen gefunden.</div>'}
+    </div>`;
+  } else {
+    section7 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🗑️</span>
+        <h3>Abschreiben — abgelaufene Chargen</h3>
+      </div>
+      <div class="wp-empty">Chargen-Import fehlt — bitte den Stock-Lots-Export hochladen.</div>
+    </div>`;
+  }
+
   // ── Tabs: upstream → downstream (Einkauf zuerst — hier beginnt der Bedarf,
-  // alles danach ist Folge davon), feste Reihenfolge, Buyback am Ende (eigener
-  // Rhythmus, kein wöchentlicher Handlungsbedarf wie die anderen 5).
+  // alles danach ist Folge davon), feste Reihenfolge, Buyback/Abschreiben am
+  // Ende (eigener Rhythmus, kein wöchentlicher Handlungsbedarf wie die anderen).
   const wpTabs = [
-    { key: 'einkauf',    label: 'Einkauf',           icon: '🛒', content: section4,  count: kaufenFam.length,    urgent: d.summary.rohwareDringend > 0 },
-    { key: 'umlagerung', label: 'Umlagerung',        icon: '🔄', content: section2b, count: fbaTransfer.length },
-    { key: 'prod-main',  label: 'Produktion Main',   icon: '📦', content: section3,  count: fbmLines.length },
-    { key: 'prod-fba',   label: 'Produktion FBA',    icon: '🏭', content: section2,  count: fbaProd.length,      urgent: d.summary.transitDringend > 0 },
-    { key: 'versand',    label: 'Versand',           icon: '✈️', content: section1,  count: fbaVersenden.length },
-    { key: 'buyback',    label: 'Buyback',           icon: '♻️', content: section6,  count: buyback?.candidates?.length || 0 },
+    { key: 'einkauf',     label: 'Einkauf',           icon: '🛒', content: section4,  count: kaufenFam.length,    urgent: d.summary.rohwareDringend > 0 },
+    { key: 'umlagerung',  label: 'Umlagerung',        icon: '🔄', content: section2b, count: fbaTransfer.length },
+    { key: 'prod-main',   label: 'Produktion Main',   icon: '📦', content: section3,  count: fbmLines.length },
+    { key: 'prod-fba',    label: 'Produktion FBA',    icon: '🏭', content: section2,  count: fbaProd.length,      urgent: d.summary.transitDringend > 0 },
+    { key: 'versand',     label: 'Versand',           icon: '✈️', content: section1,  count: fbaVersenden.length },
+    { key: 'buyback',     label: 'Buyback',           icon: '♻️', content: section6,  count: buyback?.candidates?.length || 0 },
+    { key: 'abschreiben', label: 'Abschreiben',       icon: '🗑️', content: section7,  count: abschreiben?.items?.length || 0, urgent: (abschreiben?.items?.length || 0) > 0 },
   ];
 
   const tabBar = wpTabs.map((t, i) => `

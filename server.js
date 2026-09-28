@@ -1997,6 +1997,68 @@ app.get('/api/buyback', async (req, res) => {
   }
 });
 
+// ─── Abschreiben (abgelaufene Chargen — Lager-ToDo) ───────────────────────────
+// Reine Chargen-Checkliste für den Wareneingang/Lager: jede Charge mit
+// abgelaufenem MHD, die laut letztem Chargen-Import noch physisch mit
+// Bestand > 0 geführt wird. Keine Familien-/Rohware-Zuordnung nötig — einfach
+// jede abgelaufene Charge über den kompletten Katalog. Kein eigener "erledigt"-
+// Haken nötig: sobald die Charge in MRPeasy abgeschrieben und neu importiert
+// wird, verschwindet sie von selbst aus der Liste.
+const WRITEOFF_IGNORED_GROUPS = new Set(['Beutel', 'Etiketten', 'Kartons', 'Versandarten']);
+
+function buildAbschreibenData() {
+  const artData  = loadArticles();
+  const artItems = artData.items || {};
+  const lotsData = loadStockLots();
+  const lots     = lotsData.lots || {};
+  const today    = new Date(); today.setHours(0, 0, 0, 0);
+
+  const items = [];
+  for (const [sku, lotArr] of Object.entries(lots)) {
+    const art = artItems[sku];
+    if (art && WRITEOFF_IGNORED_GROUPS.has(art.group)) continue;
+
+    for (const l of lotArr) {
+      if (!isLotExpired(l, today)) continue;
+      const exp = parseDeDate(l.verfallsdatum);
+      const tageAbgelaufen = Math.round((today - exp) / (1000 * 60 * 60 * 24));
+
+      items.push({
+        sku, name: art ? art.name : '', group: art ? art.group : '',
+        standort: l.standort || '',
+        charge: l.charge,
+        aufLager: l.aufLager, verfuegbar: l.verfuegbar,
+        unit: art ? art.unit : '', weightKg: art ? art.weightKg || 0 : 0,
+        verfallsdatum: l.verfallsdatum,
+        tageAbgelaufen,
+        lieferant: l.lieferant || '',
+        actMatchingId: l.actMatchingId || '',
+      });
+    }
+  }
+
+  // Am längsten abgelaufen zuerst — dringendster Fall für den Lagergang zuerst.
+  items.sort((a, b) => b.tageAbgelaufen - a.tageAbgelaufen);
+
+  return {
+    updatedAt: lotsData.updatedAt || null,
+    items,
+    summary: {
+      total:    items.length,
+      skuCount: new Set(items.map(i => i.sku)).size,
+    },
+  };
+}
+
+app.get('/api/abschreiben', (req, res) => {
+  try {
+    res.json(buildAbschreibenData());
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── FBA Wochenplanung ────────────────────────────────────────────────────────
 // Lead times: 7 Tage Produktion + 14 Tage Amazon Einlagerung = 21 Tage gesamt
 
