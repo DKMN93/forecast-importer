@@ -2517,7 +2517,14 @@ async function buildWochenplanungData(reqDays) {
       for (const sz of sizes) {
         const sku = prefix + '-' + sz;
         const art = artItems[sku];
-        if (!art || !art.active) continue;
+        // Bewusst NICHT auf art.active filtern — das ACTIVE-Flag in MRPeasy wird
+        // nicht zuverlässig gepflegt (z.B. MSM-FP-5: als inaktiv markiert, aber
+        // 180 Stk./Monat echter Absatz und -28 Stk. Bestand). Die Entscheidung
+        // läuft stattdessen komplett über die tatsächliche Verkaufshistorie:
+        // ohne Absatz im Zeitraum wird targetStk/rawNeed automatisch 0 und die
+        // SKU taucht in der sichtbaren Liste (fbmLines, gefiltert auf
+        // prodNeed > 0) ohnehin nicht auf — ganz ohne das Active-Flag zu brauchen.
+        if (!art) continue;
 
         const sd         = shopifyDemand[sku] || { direct: 0, bundles: {} };
         const bundleUnits = Object.values(sd.bundles).reduce((s, b) => s + b.baseUnits, 0);
