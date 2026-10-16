@@ -532,6 +532,7 @@ app.post('/api/upload-stock-lots', upload.single('file'), (req, res) => {
     const iCharge      = idx('Charge');
     const iSku         = idx('Artikelnr.');
     const iStandort    = idx('Standort');
+    const iLagerort    = idx('Lagerort');
     const iStock       = idx('Auf Lager');
     const iAvail       = idx('Verfügbar');
     const iExpiry      = idx('Verfallsdatum');
@@ -543,7 +544,7 @@ app.post('/api/upload-stock-lots', upload.single('file'), (req, res) => {
     if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes Format – Artikelnr. oder Auf Lager nicht gefunden' });
 
     const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
-    const lots = {}; // Artikelnr. → [ { charge, standort, aufLager, verfuegbar, verfallsdatum, mhd, lieferant, lieferantennummer, actMatchingId } ]
+    const lots = {}; // Artikelnr. → [ { charge, standort, lagerort, aufLager, verfuegbar, verfallsdatum, mhd, lieferant, lieferantennummer, actMatchingId } ]
 
     for (let i = 1; i < lines.length; i++) {
       const cols     = parseRow(lines[i]);
@@ -556,6 +557,7 @@ app.post('/api/upload-stock-lots', upload.single('file'), (req, res) => {
       lots[sku].push({
         charge:            cols[iCharge] || '',
         standort:          iStandort >= 0 ? (cols[iStandort] || '') : '',
+        lagerort:          iLagerort >= 0 ? (cols[iLagerort] || '') : '',
         aufLager,
         verfuegbar:        iAvail  >= 0 ? pf(cols[iAvail]) : aufLager,
         verfallsdatum:     iExpiry >= 0 ? (cols[iExpiry] || '') : '',
@@ -2025,7 +2027,7 @@ function buildAbschreibenData() {
 
       items.push({
         sku, name: art ? art.name : '', group: art ? art.group : '',
-        standort: l.standort || '',
+        standort: l.standort || '', lagerort: l.lagerort || '',
         charge: l.charge,
         aufLager: l.aufLager, verfuegbar: l.verfuegbar,
         unit: art ? art.unit : '', weightKg: art ? art.weightKg || 0 : 0,
@@ -2053,6 +2055,69 @@ function buildAbschreibenData() {
 app.get('/api/abschreiben', (req, res) => {
   try {
     res.json(buildAbschreibenData());
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── MHD Extend (umkleben) — Chargen mit < 6 Monaten Restlaufzeit ────────────
+// Eigene Liste, bewusst getrennt von "Abschreiben": hier geht's um Chargen,
+// die noch NICHT abgelaufen sind, aber bald fällig werden — Kandidaten zum
+// Umkleben/Neuetikettieren, solange noch Zeit dafür ist. Sobald eine Charge
+// tatsächlich abläuft, taucht sie stattdessen in "Abschreiben" auf (dort
+// macht Umkleben keinen Sinn mehr).
+const MHD_EXTEND_MONTHS = 6;
+
+function buildMhdExtendData() {
+  const artData  = loadArticles();
+  const artItems = artData.items || {};
+  const lotsData = loadStockLots();
+  const lots     = lotsData.lots || {};
+  const today    = new Date(); today.setHours(0, 0, 0, 0);
+  const cutoff   = new Date(today); cutoff.setDate(cutoff.getDate() + MHD_EXTEND_MONTHS * 30.44);
+
+  const items = [];
+  for (const [sku, lotArr] of Object.entries(lots)) {
+    const art = artItems[sku];
+    if (art && WRITEOFF_IGNORED_GROUPS.has(art.group)) continue;
+
+    for (const l of lotArr) {
+      const exp = parseDeDate(l.verfallsdatum);
+      if (!exp || exp < today || exp > cutoff) continue; // noch nicht abgelaufen, aber bald
+      const tageBisMhd = Math.round((exp - today) / (1000 * 60 * 60 * 24));
+
+      items.push({
+        sku, name: art ? art.name : '', group: art ? art.group : '',
+        standort: l.standort || '', lagerort: l.lagerort || '',
+        charge: l.charge,
+        aufLager: l.aufLager, verfuegbar: l.verfuegbar,
+        unit: art ? art.unit : '', weightKg: art ? art.weightKg || 0 : 0,
+        verfallsdatum: l.verfallsdatum,
+        tageBisMhd,
+        lieferant: l.lieferant || '',
+        actMatchingId: l.actMatchingId || '',
+      });
+    }
+  }
+
+  // Am knappsten zuerst — dringendster Fall für den Lagergang zuerst.
+  items.sort((a, b) => a.tageBisMhd - b.tageBisMhd);
+
+  return {
+    updatedAt: lotsData.updatedAt || null,
+    period: { months: MHD_EXTEND_MONTHS },
+    items,
+    summary: {
+      total:    items.length,
+      skuCount: new Set(items.map(i => i.sku)).size,
+    },
+  };
+}
+
+app.get('/api/mhd-extend', (req, res) => {
+  try {
+    res.json(buildMhdExtendData());
   } catch (e) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -2541,6 +2606,7 @@ async function buildWochenplanungData(reqDays) {
 
         fbmProduction.push({
           sku,
+          size:            sz,
           name:            art.name,
           active:          art.active,
           abfuellklasse:   art.abfuellklasse || '',

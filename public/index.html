@@ -1828,22 +1828,47 @@ function setLagerFilter(f) { _lagerFilter = f; loadLagerbestand(); }
 function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce via timeout */ clearTimeout(window._lagerSearchT); window._lagerSearchT = setTimeout(() => loadLagerbestand(), 300); } }
 
 // ─── Wochenplanung ────────────────────────────────────────────────────────────
+// Zuletzt geladene Wochenplanung-Daten — für den Packungsgrößen-Filter, der
+// nur neu rendert (kein Re-Fetch nötig, Filter ändert keine Server-Zahlen).
+let wpLastData = null, wpLastBuyback = null, wpLastAbschreiben = null, wpLastMhdExtend = null;
+
+// Packungsgrößen-Filter: welche -1..-5-Größen fließen in Produktion Main/FBA,
+// Umlagerung und Versand ein. Default ohne 100g (-1), siehe Feedback: die
+// 100g-Größe soll generell nicht berücksichtigt werden. Persistiert pro
+// Browser, damit die Wahl nicht bei jedem Reload zurückspringt.
+const WP_SIZE_LABELS = { '1': '100g', '2': '200g', '3': '300g', '4': '500g', '5': '1kg' };
+let wpSelectedSizes;
+try {
+  wpSelectedSizes = new Set(JSON.parse(localStorage.getItem('wpSelectedSizes')) || ['2','3','4','5']);
+} catch { wpSelectedSizes = new Set(['2','3','4','5']); }
+
+function toggleWpSize(size) {
+  if (wpSelectedSizes.has(size)) wpSelectedSizes.delete(size); else wpSelectedSizes.add(size);
+  if (wpSelectedSizes.size === 0) wpSelectedSizes.add(size); // mindestens eine Größe muss aktiv bleiben
+  try { localStorage.setItem('wpSelectedSizes', JSON.stringify([...wpSelectedSizes])); } catch {}
+  const activeTab = document.querySelector('.wp-tab.active')?.dataset.wptab;
+  renderWochenplanung(wpLastData, wpLastBuyback, wpLastAbschreiben, wpLastMhdExtend);
+  if (activeTab) switchWpTab(activeTab);
+}
+
 async function loadWochenplanung() {
   document.getElementById('wochenContent').innerHTML = '<div class="loading-overlay"><div class="spinner"></div>Lade Wochenplanung…</div>';
   try {
-    const [data, buyback, abschreiben] = await Promise.all([
+    const [data, buyback, abschreiben, mhdExtend] = await Promise.all([
       api('/wochenplanung?days=' + getPeriodDays()),
       api('/buyback?days=' + getPeriodDays()).catch(() => null), // optional: Lot-Import evtl. noch nicht hochgeladen
       api('/abschreiben').catch(() => null),
+      api('/mhd-extend').catch(() => null),
     ]);
-    renderWochenplanung(data, buyback, abschreiben);
+    wpLastData = data; wpLastBuyback = buyback; wpLastAbschreiben = abschreiben; wpLastMhdExtend = mhdExtend;
+    renderWochenplanung(data, buyback, abschreiben, mhdExtend);
     document.getElementById('topbarMeta').textContent = new Date().toLocaleString('de-DE');
   } catch (e) {
     document.getElementById('wochenContent').innerHTML = '<div style="padding:40px;color:var(--danger)">Fehler: ' + e.message + '</div>';
   }
 }
 
-function renderWochenplanung(d, buyback, abschreiben) {
+function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
   const fmt     = v => v != null ? Number(v).toLocaleString('de') : '—';
   const fmtDate = iso => iso ? new Date(iso).toLocaleDateString('de-DE') : '—';
 
@@ -1859,39 +1884,14 @@ function renderWochenplanung(d, buyback, abschreiben) {
       <button class="btn-ghost btn-sm" onclick="loadWochenplanung()">↻ Aktualisieren</button>
     </div>`;
 
-  // Summary KPI-Zeile
   const s = d.summary;
-  const summaryCards = `
-    <div class="kpi-row" style="margin-bottom:20px">
-      <div class="kpi ${s.zuVersenden > 0 ? 'warn' : ''}">
-        <div class="k-label">Zu versenden</div>
-        <div class="k-val">${fmt(s.zuVersenden)}</div>
-        <div class="k-sub">Stk. an Amazon</div>
-      </div>
-      <div class="kpi ${s.zuProduzierenFba > 0 ? 'danger' : 'success'}">
-        <div class="k-label">Produzieren FBA</div>
-        <div class="k-val">${fmt(s.zuProduzierenFba)}</div>
-        <div class="k-sub">Stk. für Transit</div>
-      </div>
-      <div class="kpi ${s.zuProduzierenFbm > 0 ? 'warn' : 'success'}">
-        <div class="k-label">Produzieren FBM</div>
-        <div class="k-val">${fmt(s.zuProduzierenFbm)}</div>
-        <div class="k-sub">Stk. für MAIN Lager</div>
-      </div>
-      <div class="kpi ${s.nochKaufenSaecke > 0 ? 'danger' : s.zuEinkaufenSaecke > 0 ? 'warn' : 'success'}">
-        <div class="k-label">Noch zu kaufen</div>
-        <div class="k-val">${fmt(s.nochKaufenSaecke ?? s.zuEinkaufenSaecke)}</div>
-        <div class="k-sub">${s.imZulaufKg > 0 ? fmt(s.imZulaufKg) + ' KG im Zulauf' : fmt(s.zuEinkaufenKg) + ' KG Bedarf'}</div>
-      </div>
-      <div class="kpi">
-        <div class="k-label">Familien mit Bedarf</div>
-        <div class="k-val">${s.familienMitBedarf}</div>
-        <div class="k-sub">von ${d.families.length} Familien</div>
-      </div>
-    </div>`;
 
-  // Alle FBA-Einträge über alle Familien UND alle Gebindegrößen (-1 bis -5) flach ausrollen
-  const fbaEntries = d.families.flatMap(f => (f.fbaAll || []).map(fba => ({ f, fba })));
+  // Alle FBA-Einträge über alle Familien UND alle Gebindegrößen (-1 bis -5) flach
+  // ausrollen, direkt auf die im Packungsgrößen-Filter gewählten Größen begrenzt
+  // (betrifft Versand, Produktion FBA, Umlagerung — Einkauf bleibt unberührt,
+  // da der Rohware-Pool familienweit, nicht größenweise gerechnet wird).
+  const fbaEntries = d.families.flatMap(f => (f.fbaAll || []).map(fba => ({ f, fba })))
+    .filter(e => wpSelectedSizes.has(e.fba.size));
 
   // ── Sektion 1: Versenden an Amazon ────────────────────────────────────────
   const fbaVersenden = fbaEntries.filter(e => e.fba.recommendation > 0);
@@ -2068,9 +2068,54 @@ function renderWochenplanung(d, buyback, abschreiben) {
   const fbmLines = [];
   d.families.forEach(f => {
     f.fbmProduction.forEach(p => {
-      if (p.prodNeed > 0) fbmLines.push({ ...p, familyKey: f.familyKey });
+      if (p.prodNeed > 0 && wpSelectedSizes.has(p.size)) fbmLines.push({ ...p, familyKey: f.familyKey });
     });
   });
+
+  // Packungsgrößen-Filter — Chips zum Ein-/Ausblenden einzelner Größen
+  // (z.B. 100g generell ignorieren). Wirkt auf Versand/Produktion FBA/
+  // Umlagerung/Produktion Main, nicht auf Einkauf (familienweiter Rohware-Pool).
+  const sizeFilterBar = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px">
+      <span style="font-size:0.78rem;color:var(--muted)">Packungsgrößen:</span>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${Object.entries(WP_SIZE_LABELS).map(([sz, label]) => `
+        <div class="sku-chip${wpSelectedSizes.has(sz) ? ' active' : ''}" onclick="toggleWpSize('${sz}')">${label}</div>
+      `).join('')}</div>
+    </div>`;
+
+  // Summary KPI-Zeile — Mengen aus den bereits größengefilterten fbaEntries/
+  // fbmLines, damit die Kacheln zur sichtbaren Liste darunter passen.
+  const zuVersendenF      = fbaEntries.reduce((sum, e) => sum + e.fba.sendNow, 0);
+  const zuProduzierenFbaF = fbaEntries.reduce((sum, e) => sum + e.fba.newProd, 0);
+  const zuProduzierenFbmF = fbmLines.reduce((sum, p) => sum + p.prodNeed, 0);
+  const summaryCards = `
+    <div class="kpi-row" style="margin-bottom:20px">
+      <div class="kpi ${zuVersendenF > 0 ? 'warn' : ''}">
+        <div class="k-label">Zu versenden</div>
+        <div class="k-val">${fmt(zuVersendenF)}</div>
+        <div class="k-sub">Stk. an Amazon</div>
+      </div>
+      <div class="kpi ${zuProduzierenFbaF > 0 ? 'danger' : 'success'}">
+        <div class="k-label">Produzieren FBA</div>
+        <div class="k-val">${fmt(zuProduzierenFbaF)}</div>
+        <div class="k-sub">Stk. für Transit</div>
+      </div>
+      <div class="kpi ${zuProduzierenFbmF > 0 ? 'warn' : 'success'}">
+        <div class="k-label">Produzieren FBM</div>
+        <div class="k-val">${fmt(zuProduzierenFbmF)}</div>
+        <div class="k-sub">Stk. für MAIN Lager</div>
+      </div>
+      <div class="kpi ${s.nochKaufenSaecke > 0 ? 'danger' : s.zuEinkaufenSaecke > 0 ? 'warn' : 'success'}">
+        <div class="k-label">Noch zu kaufen</div>
+        <div class="k-val">${fmt(s.nochKaufenSaecke ?? s.zuEinkaufenSaecke)}</div>
+        <div class="k-sub">${s.imZulaufKg > 0 ? fmt(s.imZulaufKg) + ' KG im Zulauf' : fmt(s.zuEinkaufenKg) + ' KG Bedarf'}</div>
+      </div>
+      <div class="kpi">
+        <div class="k-label">Familien mit Bedarf</div>
+        <div class="k-val">${s.familienMitBedarf}</div>
+        <div class="k-sub">von ${d.families.length} Familien</div>
+      </div>
+    </div>`;
 
   let section3 = '';
   if (fbmLines.length) {
@@ -2364,9 +2409,61 @@ function renderWochenplanung(d, buyback, abschreiben) {
     </div>`;
   }
 
+  // ── Sektion 9: MHD Extend (umkleben) ────────────────────────────────────────
+  let section8 = '';
+  if (mhdExtend && mhdExtend.items) {
+    const meRows = mhdExtend.items.map(it => {
+      const isKg      = (it.unit || '').toLowerCase() === 'kg';
+      const kgEquiv   = !isKg && it.weightKg > 0 ? +(it.aufLager * it.weightKg).toFixed(2) : null;
+      const gebucht   = it.aufLager - it.verfuegbar;
+      const urgColor  = it.tageBisMhd < 30 ? 'color:var(--danger);font-weight:700' : it.tageBisMhd < 90 ? 'color:var(--warn);font-weight:700' : 'color:var(--text)';
+      return `<tr>
+        <td>${it.lagerort || '—'}</td>
+        <td style="font-size:0.82rem">${it.charge}</td>
+        <td><strong>${it.sku}</strong></td>
+        <td style="font-size:0.82rem">${it.name}</td>
+        <td style="text-align:right">${fmt(it.aufLager)} ${it.unit || ''}${kgEquiv !== null ? `<div style="font-size:0.7rem;color:var(--muted)">= ${kgEquiv} kg</div>` : ''}${gebucht > 0 ? `<div style="font-size:0.68rem;color:var(--warn)">davon ${fmt(gebucht)} gebucht</div>` : ''}</td>
+        <td>${it.verfallsdatum}</td>
+        <td style="text-align:right;${urgColor}">${it.tageBisMhd} Tage</td>
+      </tr>`;
+    }).join('');
+
+    section8 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🏷️</span>
+        <h3>MHD Extend — Chargen umkleben</h3>
+        ${mhdExtend.items.length > 0
+          ? `<span class="wp-badge" style="background:rgba(200,150,60,0.3)">⚠ ${mhdExtend.summary.total} Chargen · ${mhdExtend.summary.skuCount} SKUs</span>`
+          : `<span class="wp-badge" style="background:rgba(46,125,82,0.3)">✓ Nichts unter ${mhdExtend.period.months} Mo.</span>`}
+      </div>
+      <div style="padding:8px 20px 0;font-size:0.75rem;color:var(--muted)">
+        Chargen mit unter ${mhdExtend.period.months} Monaten Restlaufzeit, die noch nicht abgelaufen sind — Kandidaten zum
+        Umkleben/Neuetikettieren, solange noch Zeit dafür ist. Läuft eine Charge tatsächlich ab, wandert sie stattdessen in "Abschreiben".
+      </div>
+      ${mhdExtend.items.length > 0 ? `<div class="table-wrap"><table>
+        <thead><tr>
+          <th>Lagerplatz</th><th>Charge</th><th>Artikelnummer</th><th>Artikelname</th>
+          <th style="text-align:right">Menge</th><th>MHD</th><th style="text-align:right">Tage bis MHD</th>
+        </tr></thead>
+        <tbody>${meRows}</tbody>
+      </table></div>` : '<div class="wp-empty">Keine Chargen unter der Restlaufzeit-Grenze gefunden.</div>'}
+    </div>`;
+  } else {
+    section8 = `
+    <div class="wp-section">
+      <div class="wp-section-header">
+        <span style="font-size:1.1rem">🏷️</span>
+        <h3>MHD Extend — Chargen umkleben</h3>
+      </div>
+      <div class="wp-empty">Chargen-Import fehlt — bitte den Stock-Lots-Export hochladen.</div>
+    </div>`;
+  }
+
   // ── Tabs: upstream → downstream (Einkauf zuerst — hier beginnt der Bedarf,
-  // alles danach ist Folge davon), feste Reihenfolge, Buyback/Abschreiben am
-  // Ende (eigener Rhythmus, kein wöchentlicher Handlungsbedarf wie die anderen).
+  // alles danach ist Folge davon), feste Reihenfolge, Buyback/MHD-Extend/
+  // Abschreiben am Ende (eigener Rhythmus, kein wöchentlicher Handlungsbedarf
+  // wie die anderen — reine Bestandshygiene).
   const wpTabs = [
     { key: 'einkauf',     label: 'Einkauf',           icon: '🛒', content: section4,  count: kaufenFam.length,    urgent: d.summary.rohwareDringend > 0 },
     { key: 'umlagerung',  label: 'Umlagerung',        icon: '🔄', content: section2b, count: fbaTransfer.length },
@@ -2374,6 +2471,7 @@ function renderWochenplanung(d, buyback, abschreiben) {
     { key: 'prod-fba',    label: 'Produktion FBA',    icon: '🏭', content: section2,  count: fbaProd.length,      urgent: d.summary.transitDringend > 0 },
     { key: 'versand',     label: 'Versand',           icon: '✈️', content: section1,  count: fbaVersenden.length },
     { key: 'buyback',     label: 'Buyback',           icon: '♻️', content: section6,  count: buyback?.candidates?.length || 0 },
+    { key: 'mhd-extend',  label: 'MHD Extend',        icon: '🏷️', content: section8,  count: mhdExtend?.items?.length || 0,   urgent: (mhdExtend?.items?.length || 0) > 0 },
     { key: 'abschreiben', label: 'Abschreiben',       icon: '🗑️', content: section7,  count: abschreiben?.items?.length || 0, urgent: (abschreiben?.items?.length || 0) > 0 },
   ];
 
@@ -2387,7 +2485,7 @@ function renderWochenplanung(d, buyback, abschreiben) {
     <div class="wp-tabpanel${i === 0 ? ' active' : ''}" id="wptab-${t.key}">${t.content}</div>`).join('');
 
   document.getElementById('wochenContent').innerHTML =
-    metaBar + summaryCards + `<div class="wp-tabs">${tabBar}</div>` + tabPanels;
+    metaBar + sizeFilterBar + summaryCards + `<div class="wp-tabs">${tabBar}</div>` + tabPanels;
 }
 
 function switchWpTab(key) {
