@@ -1,0 +1,29 @@
+{
+  "2026-07-31": {
+    "hauptlager": 33098.6,
+    "transitAmazon": 757.27,
+    "unterwegsDhlDpd": null,
+    "fbaSellable": 3362.27,
+    "gesamt": 37218.15,
+    "erstelltAm": "2026-08-05T00:00:00.000Z",
+    "hinweis": "Claude-Skill, noch 3-Stufen-Modell ohne Unterwegs DHL/DPD"
+  },
+  "2026-08-31": {
+    "hauptlager": 36567.27,
+    "transitAmazon": 840.24,
+    "unterwegsDhlDpd": 697.68,
+    "fbaSellable": 3901.06,
+    "gesamt": 42006.25,
+    "erstelltAm": "2026-09-03T15:32:00.176Z",
+    "hinweis": "Claude-Skill, Unterwegs noch aus Sellerboard (ca. 100-150 EUR zu niedrig)"
+  },
+  "2026-09-30": {
+    "hauptlager": 33545.64,
+    "transitAmazon": 840.24,
+    "unterwegsDhlDpd": 1280.03,
+    "fbaSellable": 2611.49,
+    "gesamt": 38277.39,
+    "erstelltAm": "2026-10-18T06:30:00.000Z",
+    "hinweis": "Claude-Skill, Unterwegs je Sendung"
+  }
+}

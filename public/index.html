@@ -293,6 +293,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .sync-drop:hover { border-color:var(--accent2); color:var(--text); }
 .sync-drop.dragover { border-color:var(--accent); background:rgba(0,68,54,0.06); color:var(--accent); }
 .sync-drop input[type=file] { display:none; }
+.inv-cards .card .value { font-size:1.35rem; white-space:nowrap; }
 .sync-hint { font-size:0.72rem; color:var(--muted); line-height:1.4; }
 
 /* ── Alle SKUs ── */
@@ -382,6 +383,9 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
     </div>
     <div class="nav-item" onclick="showView('aktiv')">
       <span class="icon">📋</span> Aktive Artikel
+    </div>
+    <div class="nav-item" onclick="showView('inventur')">
+      <span class="icon">🧾</span> Inventur
     </div>
     <div class="nav-item" onclick="showView('settings')">
       <span class="icon">⚙️</span> Einstellungen
@@ -539,6 +543,24 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
       </div>
     </div>
 
+    <!-- ─── INVENTUR VIEW ─── -->
+    <div class="view" id="view-inventur">
+      <p class="sync-intro">Monatsinventur für den Steuerberater: 5 Exporte hochladen, Stichtag wählen, generieren. Jeder Lauf wird mit Quelldateien protokolliert und die Excel archiviert. Der Vormonatsvergleich kommt automatisch aus dem letzten Lauf.</p>
+      <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px">
+        <div class="form-group" style="margin:0">
+          <label class="form-label">Stichtag</label>
+          <input type="date" id="invStichtag" />
+        </div>
+        <button class="btn-primary" id="invGenerateBtn" onclick="generateInventur()">Inventur generieren</button>
+      </div>
+      <div class="sync-grid" id="invSources"></div>
+      <div id="invResult" style="margin-top:24px"></div>
+      <div class="table-box" style="margin-top:24px">
+        <div class="table-box-header"><h3>Protokoll</h3></div>
+        <div id="invRuns"><div class="loading-overlay"><div class="spinner"></div>Lade Protokoll…</div></div>
+      </div>
+    </div>
+
     <!-- ─── SETTINGS VIEW ─── -->
     <div class="view" id="view-settings">
       <div style="max-width:520px">
@@ -608,7 +630,6 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
             <button class="btn-ghost" onclick="downloadExcel()" style="text-align:left">Excel herunterladen (Übersicht)</button>
             <button class="btn-ghost" onclick="downloadCsv()" style="text-align:left">CSV herunterladen (MRPeasy Import)</button>
             <button class="btn-primary" onclick="downloadReorderCsv()" style="text-align:left">Mindestbestand CSV → MRPeasy Import</button>
-            <button class="btn-primary" onclick="downloadInventory()" style="text-align:left;background:var(--success, #16a34a)">Inventur Export (Steuerberater)</button>
           </div>
         </div>
 
@@ -674,7 +695,7 @@ const viewTitles = {
   skumain: 'Alle SKUs',
   planung: 'Planung', artikel: 'Artikel & Mindestbestände',
   lager: 'Lagerübersicht', fba: 'FBA Wochenplanung', aktiv: 'Aktive Artikel',
-  log: 'Update-Protokoll', settings: 'Einstellungen'
+  log: 'Update-Protokoll', settings: 'Einstellungen', inventur: 'Inventur'
 };
 
 // ─── Mobile Sidebar (Hamburger-Menü) ────────────────────────────────────────
@@ -713,6 +734,7 @@ function showView(name) {
   if (name === 'aktiv')      loadPromise = loadAktiveArtikel();
   if (name === 'log')        loadPromise = loadLog();
   if (name === 'settings')   loadPromise = loadSettings();
+  if (name === 'inventur')   loadPromise = loadInventur();
   return loadPromise || Promise.resolve();
 }
 
@@ -850,6 +872,139 @@ async function handleSyncFile(key, file) {
   }
 }
 
+// ─── Monatsinventur ───────────────────────────────────────────────────────────
+const INVENTUR_SOURCES = [
+  { key: 'main', label: '1. MRPeasy Hauptlager', accept: '.csv',
+    hint: 'MRPeasy → Lager → Bestand, Location-Filter <b>„Main Lager“</b>, CSV-Export (inventory_*.csv). Am Stichtag ziehen – MRPeasy zeigt nur den aktuellen Stand.' },
+  { key: 'transit', label: '2. MRPeasy Transit Amazon', accept: '.csv',
+    hint: 'Gleicher Export, Location-Filter <b>„Transit Amazon“</b>. Ebenfalls am Stichtag ziehen. Die „Amazon FBA“-Location aus MRPeasy wird nicht verwendet.' },
+  { key: 'shipments', label: '3. Sendungen an Amazon', accept: '.xlsx,.xls',
+    hint: 'Seller Central → Sendungen an Amazon, Zeitraum ca. 6–8 Wochen vor Stichtag bis heute, Export (inv_get_FBAShipment_export_*.xlsx). Kann nachträglich gezogen werden.' },
+  { key: 'ledgerDetail', label: '4. Ledger Detailansicht', accept: '.csv',
+    hint: 'Seller Central → Berichte → Bestandsbuch (LEDGER_REPORT), <b>Detailansicht</b>, „Exakte Daten“ = kompletter Stichtag-Monat, CSV. Liefert Wareneingänge je Sendung.' },
+  { key: 'ledger', label: '5. Ledger Zusammenfassung', accept: '.csv',
+    hint: 'Gleicher Bericht, <b>Zusammenfassung</b>, „Letzter Monat“, aggregiert monatlich, CSV. Liefert den FBA-Bestand am Monatsende.' },
+];
+const invFiles = {};
+
+function invEsc(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function invEur(n) { return n == null ? '—' : n.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
+
+// Standard-Stichtag: letzter Tag des Vormonats (Inventur wird nach Monatsende erstellt)
+function invDefaultStichtag() {
+  const d = new Date();
+  const last = new Date(d.getFullYear(), d.getMonth(), 0);
+  return `${last.getFullYear()}-${String(last.getMonth() + 1).padStart(2, '0')}-${String(last.getDate()).padStart(2, '0')}`;
+}
+
+async function loadInventur() {
+  const st = document.getElementById('invStichtag');
+  if (!st.value) st.value = invDefaultStichtag();
+  renderInventurSources();
+  try {
+    const { runs } = await api('/inventur/runs');
+    renderInventurRuns(runs);
+  } catch (e) {
+    document.getElementById('invRuns').innerHTML = `<div class="wp-empty">Fehler beim Laden: ${invEsc(e.message)}</div>`;
+  }
+}
+
+function renderInventurSources() {
+  const el = document.getElementById('invSources');
+  el.innerHTML = INVENTUR_SOURCES.map(cfg => {
+    const f = invFiles[cfg.key];
+    return `<div class="sync-card">
+      <div class="sync-card-title">${cfg.label}</div>
+      <div class="sync-freshness"><span class="freshness-dot ${f ? 'fresh' : ''}"></span>${f ? invEsc(f.name) : 'noch keine Datei'}</div>
+      <label class="sync-drop" data-key="${cfg.key}">
+        ${f ? 'Andere Datei wählen' : 'Datei hierher ziehen oder klicken'}
+        <input type="file" accept="${cfg.accept}" onchange="setInventurFile('${cfg.key}', this.files[0]); this.value='';">
+      </label>
+      <div class="sync-hint">${cfg.hint}</div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.sync-drop').forEach(drop => {
+    drop.addEventListener('dragover',  e => { e.preventDefault(); drop.classList.add('dragover'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+    drop.addEventListener('drop', e => {
+      e.preventDefault();
+      drop.classList.remove('dragover');
+      if (e.dataTransfer.files[0]) setInventurFile(drop.dataset.key, e.dataTransfer.files[0]);
+    });
+  });
+}
+
+function setInventurFile(key, file) {
+  if (!file) return;
+  invFiles[key] = file;
+  renderInventurSources();
+}
+
+async function generateInventur() {
+  const stichtag = document.getElementById('invStichtag').value;
+  const missing = INVENTUR_SOURCES.filter(s => !invFiles[s.key]).map(s => s.label);
+  if (!stichtag) { toast('Bitte Stichtag wählen', 'err'); return; }
+  if (missing.length) { toast('Es fehlen noch: ' + missing.join(', '), 'err'); return; }
+  const btn = document.getElementById('invGenerateBtn');
+  btn.disabled = true;
+  toast('Inventur wird berechnet…');
+  try {
+    const form = new FormData();
+    form.append('stichtag', stichtag);
+    for (const s of INVENTUR_SOURCES) form.append(s.key, invFiles[s.key]);
+    const res  = await fetch('/api/inventur/generate', { method: 'POST', body: form });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Fehler');
+    renderInventurResult(data);
+    toast('✓ Inventur ' + stichtag + ' erstellt');
+    const { runs } = await api('/inventur/runs');
+    renderInventurRuns(runs);
+  } catch (e) {
+    toast('Fehler: ' + e.message, 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderInventurResult(d) {
+  const diff = d.priorMonth ? `${d.priorMonth.differenz >= 0 ? '+' : ''}${invEur(d.priorMonth.differenz)} ggü. ${d.priorMonth.stichtag}` : 'kein Vormonat';
+  const list = (title, items) => items.length ? `<div style="margin-top:14px"><div class="form-label">${title}</div><ul style="margin:6px 0 0 18px;font-size:0.84rem">${items.map(i => `<li>${i}</li>`).join('')}</ul></div>` : '';
+  const nonSell = Object.entries(d.nichtVerkaeuflich || {}).map(([k, v]) => `${invEsc(k)}: ${v} Stk.`);
+  document.getElementById('invResult').innerHTML = `
+    <div class="cards inv-cards">
+      <div class="card accent"><div class="label">Gesamt ${invEsc(d.stichtag)}</div><div class="value">${invEur(d.gesamt)}</div><div class="sub">${diff}</div></div>
+      <div class="card"><div class="label">1. Hauptlager</div><div class="value">${invEur(d.hauptlager)}</div><div class="sub">${d.skus.hauptlager} SKUs mit Bestand</div></div>
+      <div class="card"><div class="label">2. Transit Amazon</div><div class="value">${invEur(d.transitAmazon)}</div><div class="sub">${d.skus.transit} SKUs mit Bestand</div></div>
+      <div class="card"><div class="label">3. Unterwegs DHL/DPD</div><div class="value">${invEur(d.unterwegsDhlDpd)}</div><div class="sub">${new Set(d.unterwegsDetail.map(r => r.Sendung)).size} Sendungen</div></div>
+      <div class="card"><div class="label">4. FBA verkaufsfähig</div><div class="value">${invEur(d.fbaSellable)}</div></div>
+    </div>
+    <div class="table-box" style="padding:18px 20px">
+      <a class="btn-primary" style="display:inline-block;text-decoration:none;padding:10px 18px" href="/api/inventur/report/${encodeURIComponent(d.reportFile)}">Excel herunterladen</a>
+      ${list('⚠ Warnungen', d.warnungen.map(invEsc))}
+      ${list('Prüfhinweise Unterwegs', d.pruefhinweise.map(invEsc))}
+      ${list('Nicht verkäuflich bei Amazon (separat, nicht im Gesamtwert)', nonSell)}
+      ${list('Nicht bewertbar (separat, nicht im Gesamtwert)', d.nichtBewertbar.map(u => `${invEsc(u.SKU)}: ${u.Menge} Stk. – ${invEsc(u.Grund)}`))}
+    </div>`;
+}
+
+function renderInventurRuns(runs) {
+  const el = document.getElementById('invRuns');
+  if (!runs.length) { el.innerHTML = '<div style="padding:20px;color:var(--muted)">Noch keine Läufe im Tool.</div>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Erstellt</th><th>Stichtag</th><th style="text-align:right">Hauptlager</th><th style="text-align:right">Transit</th><th style="text-align:right">Unterwegs</th><th style="text-align:right">FBA</th><th style="text-align:right">Gesamt</th><th>Quellen</th><th></th></tr></thead>
+    <tbody>${runs.map(r => `<tr>
+      <td>${new Date(r.timestamp).toLocaleString('de-DE')}</td>
+      <td><b>${invEsc(r.stichtag)}</b></td>
+      <td style="text-align:right">${invEur(r.summary.hauptlager)}</td>
+      <td style="text-align:right">${invEur(r.summary.transitAmazon)}</td>
+      <td style="text-align:right">${invEur(r.summary.unterwegsDhlDpd)}</td>
+      <td style="text-align:right">${invEur(r.summary.fbaSellable)}</td>
+      <td style="text-align:right"><b>${invEur(r.summary.gesamt)}</b></td>
+      <td style="font-size:0.72rem;color:var(--muted)" title="${invEsc(Object.values(r.quellen).join('\n'))}">${Object.keys(r.quellen).length} Dateien</td>
+      <td><a href="/api/inventur/report/${encodeURIComponent(r.reportFile)}">Excel</a></td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
 // ─── CSV Download ─────────────────────────────────────────────────────────────
 async function downloadCsv() {
   toast('CSV wird erstellt… bitte warten');
@@ -883,25 +1038,6 @@ async function downloadReorderCsv() {
     a.click();
     URL.revokeObjectURL(url);
     toast('Mindestbestand CSV heruntergeladen ✓');
-  } catch (e) {
-    toast('Fehler: ' + e.message, 'err');
-  }
-}
-
-// ─── Inventur Export (Steuerberater) ─────────────────────────────────────────
-async function downloadInventory() {
-  toast('Inventur wird erstellt… bitte warten');
-  try {
-    const res = await fetch('/api/export/inventory');
-    if (!res.ok) { toast('Fehler beim Erstellen der Inventur', 'err'); return; }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'Inventur_' + new Date().toISOString().slice(0,10) + '.xlsx';
-    a.click();
-    URL.revokeObjectURL(url);
-    toast('Inventur Export heruntergeladen ✓');
   } catch (e) {
     toast('Fehler: ' + e.message, 'err');
   }

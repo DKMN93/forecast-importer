@@ -939,179 +939,83 @@ app.get('/api/export', async (req, res) => {
   }
 });
 
-// ─── Inventur-Export (Steuerberater) ─────────────────────────────────────────
-// Stichtags-Inventur: alle Lagerplätze mit Mengen + Einstandskosten.
-// Amazon FBA: verfügbar + reserviert (FC-Transfers + Kundenbestellungen) = Gesamteigentum bei Amazon.
+// ─── Monatsinventur (Steuerberater, 5 Quellen-Uploads) ───────────────────────
+// Berechnung in lib/inventur.js. Historie = letzter Stand je Stichtag (für Vormonatsvergleich),
+// Läufe = jeder Generieren-Klick (Audit-Log), Reports = archivierte xlsx je Lauf.
+const { buildInventur } = require('./lib/inventur');
+const INVENTUR_HISTORY_FILE = path.join(DATA_DIR, 'inventur-historie.json');
+const INVENTUR_RUNS_FILE    = path.join(DATA_DIR, 'inventur-laeufe.json');
+const INVENTUR_REPORTS_DIR  = path.join(DATA_DIR, 'inventur-reports');
+const INVENTUR_FILE_FIELDS  = ['main', 'transit', 'shipments', 'ledgerDetail', 'ledger'];
 
-app.get('/api/export/inventory', (req, res) => {
-  try {
-    const dateStr = new Date().toISOString().slice(0, 10);
-
-    const fullData  = loadStockFull();
-    const fullItems = fullData.items || [];
-    const fbaData   = loadFbaStock();
-    const fbaItems  = fbaData.items || {};
-    const shipData  = loadFbaShipments();
-    const inTransit = shipData.inTransit || {};
-
-    // Kosten-Lookup: globaler gewichteter Ø-Einstandspreis über alle Standorte pro SKU.
-    // Verhindert, dass die Reihenfolge im CSV (Transit vor Main) den Preis verfälscht.
-    const globalCostAgg = {};
-    for (const it of fullItems) {
-      if (!globalCostAgg[it.sku]) globalCostAgg[it.sku] = { costSum: 0, costQty: 0 };
-      globalCostAgg[it.sku].costSum += it.costSum || 0;
-      globalCostAgg[it.sku].costQty += it.costQty || 0;
-    }
-    const getCost = sku => {
-      const base = sku.replace(/-FBA$/i, '');
-      const g = globalCostAgg[base] || globalCostAgg[sku];
-      if (g && g.costQty > 0) return +(g.costSum / g.costQty).toFixed(6);
-      return 0;
-    };
-
-    // Gruppen-Etiketten für Steuerberater
-    const gruppeLabel = g => {
-      if (['Beutel', 'Etiketten', 'Kartons'].includes(g)) return 'Packmittel / Hilfsstoffe';
-      return g || 'Fertigware';
-    };
-    const lagerBeschreibung = (standort, gruppe, sku) => {
-      if (standort === 'Transit Amazon') return 'FBA-Transit Lager (bei uns, versandbereit)';
-      if (gruppe === 'Rohstoffe') return 'Hauptlager – Rohstoffe';
-      if (['Beutel', 'Etiketten', 'Kartons'].includes(gruppe)) return 'Hauptlager – Packmittel';
-      if (sku.endsWith('-9')) return 'Hauptlager – Herstellergebinde (Rohware in Gebinde)';
-      return 'Hauptlager – Fertigware';
-    };
-
-    const rows = [];
-    const headers = [
-      'Lagerplatz', 'Lagerplatz Beschreibung',
-      'Artikelnummer', 'Artikelname', 'Produktgruppe',
-      'Verfügbare Menge', 'Maßeinheit',
-      'Einheitspreis Ø (€)', 'Gesamtwert (€)',
-    ];
-
-    // ── 1. Main Lager + Transit Lager (aus stock-full.json) ──
-    const GRUPPEN_ORDER = { 'Rohstoffe': 0, 'Fertigware': 1, 'Beutel': 2, 'Etiketten': 2, 'Kartons': 2 };
-    const mainSorted = fullItems
-      .filter(it => it.available > 0 && it.standort !== 'Amazon FBA')
-      .sort((a, b) => {
-        if (a.standort !== b.standort) return a.standort === 'Transit Amazon' ? 1 : -1;
-        return (GRUPPEN_ORDER[a.gruppe] ?? 9) - (GRUPPEN_ORDER[b.gruppe] ?? 9) || a.sku.localeCompare(b.sku);
-      });
-
-    for (const it of mainSorted) {
-      const standortLabel = it.standort === 'Transit Amazon' ? 'Transit Lager' : 'Hauptlager';
-      const costGlobal = getCost(it.sku);
-      const unitCost   = costGlobal > 0 ? costGlobal : (it.avgCostPerUnit > 0 ? it.avgCostPerUnit : 0);
-      rows.push([
-        standortLabel,
-        lagerBeschreibung(it.standort, it.gruppe, it.sku),
-        it.sku,
-        it.name,
-        gruppeLabel(it.gruppe),
-        it.available,
-        it.unit,
-        unitCost > 0 ? unitCost : '',
-        unitCost > 0 ? +(it.available * unitCost).toFixed(2) : '',
-      ]);
-    }
-
-    // ── 2. Ware unterwegs zu Amazon (Sellerboard Shipments) ──
-    for (const [skuFba, trData] of Object.entries(inTransit)) {
-      const enRoute = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
-      if (enRoute <= 0) continue;
-      const baseSku = skuFba.replace(/-FBA$/i, '');
-      const fba     = fbaItems[skuFba];
-      const cost    = getCost(baseSku);
-      rows.push([
-        'Amazon FBA – Unterwegs',
-        'Versendet, auf dem Weg zum Amazon Warehouse (noch nicht eingebucht)',
-        baseSku,
-        fba ? fba.title.substring(0, 100) : baseSku,
-        'Fertigware',
-        enRoute,
-        'Stk.',
-        cost > 0 ? cost : '',
-        cost > 0 ? +(enRoute * cost).toFixed(2) : '',
-      ]);
-    }
-
-    // ── 3. Amazon FBA Lager (Sellerboard) ──
-    // Verfügbar + Reserviert (FC-Transfers & Kundenbestellungen) = Gesamteigentum bei Amazon
-    for (const [skuFba, fba] of Object.entries(fbaItems)) {
-      const avail    = fba.fbaStock    || 0;
-      const reserved = fba.fbaReserved || 0;
-      if (avail <= 0 && reserved <= 0) continue;
-      const baseSku = skuFba.replace(/-FBA$/i, '');
-      const cost    = getCost(baseSku);
-      const title   = (fba.title || baseSku).substring(0, 100);
-      if (avail > 0) {
-        rows.push([
-          'Amazon FBA Lager',
-          'Im Amazon Warehouse – Verfügbar zum Kauf',
-          baseSku,
-          title,
-          'Fertigware',
-          avail,
-          'Stk.',
-          cost > 0 ? cost : '',
-          cost > 0 ? +(avail * cost).toFixed(2) : '',
-        ]);
-      }
-      if (reserved > 0) {
-        rows.push([
-          'Amazon FBA Lager',
-          'Im Amazon Warehouse – Reserviert (FC-Transfer & Kundenbestellungen)',
-          baseSku,
-          title,
-          'Fertigware',
-          reserved,
-          'Stk.',
-          cost > 0 ? cost : '',
-          cost > 0 ? +(reserved * cost).toFixed(2) : '',
-        ]);
-      }
-    }
-
-    // ── Summenzeile ──
-    const totalVal = rows.reduce((s, r) => s + (typeof r[8] === 'number' ? r[8] : 0), 0);
-    rows.push(['', '', '', '', '', '', '', 'GESAMT', +totalVal.toFixed(2)]);
-
-    // ── Excel bauen ──
-    const sheetData = [headers, ...rows];
-    const wb = xlsx.utils.book_new();
-    const ws = xlsx.utils.aoa_to_sheet(sheetData);
-    ws['!cols'] = [
-      {wch:24}, {wch:48}, {wch:18}, {wch:55}, {wch:22},
-      {wch:16}, {wch:10}, {wch:18}, {wch:16},
-    ];
-
-    // Datenquellen-Info als zweites Sheet
-    const infoRows = [
-      ['Inventur-Export', `Stichtag: ${dateStr}`],
-      [],
-      ['Datenquelle', 'Datei', 'Stand'],
-      ['Hauptlager & Transit', 'MRPeasy Chargen-Export (stock_lots)', fullData.updatedAt || '—'],
-      ['Amazon FBA Lager', 'Sellerboard Lager-Export', fbaData.updatedAt || '—'],
-      ['Amazon FBA unterwegs', 'Sellerboard Sendungen-Export', shipData.updatedAt || '—'],
-      [],
-      ['Hinweis:', 'Es werden nur verfügbare Mengen ("Verfügbar") gewertet.'],
-      ['', 'Reservierte Ware (Gebucht) und Ware im Zulauf sind nicht enthalten.'],
-    ];
-    const wsInfo = xlsx.utils.aoa_to_sheet(infoRows);
-    wsInfo['!cols'] = [{wch:30}, {wch:50}, {wch:20}];
-
-    xlsx.utils.book_append_sheet(wb, ws,     `Inventur_${dateStr}`);
-    xlsx.utils.book_append_sheet(wb, wsInfo, 'Datenquellen');
-
-    const buf = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    res.setHeader('Content-Disposition', `attachment; filename="Inventur_${dateStr}.xlsx"`);
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.send(buf);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
+function loadInventurHistory() {
+  try { return JSON.parse(fs.readFileSync(INVENTUR_HISTORY_FILE, 'utf8')); }
+  catch {
+    // Startwerte aus den Läufen vor Einbau ins Tool (Claude-Skill ingreo-monatsinventur)
+    try { return JSON.parse(fs.readFileSync(path.join(__dirname, 'inventur-historie.seed.json'), 'utf8')); }
+    catch { return {}; }
   }
+}
+function loadInventurRuns() {
+  try { return JSON.parse(fs.readFileSync(INVENTUR_RUNS_FILE, 'utf8')); }
+  catch { return []; }
+}
+
+app.post('/api/inventur/generate', upload.fields(INVENTUR_FILE_FIELDS.map(name => ({ name, maxCount: 1 }))), (req, res) => {
+  try {
+    const stichtag = String(req.body.stichtag || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(stichtag)) return res.status(400).json({ error: 'Stichtag fehlt oder ungültig (YYYY-MM-DD)' });
+    const missing = INVENTUR_FILE_FIELDS.filter(f => !req.files?.[f]?.[0]);
+    if (missing.length) return res.status(400).json({ error: 'Dateien fehlen: ' + missing.join(', ') });
+    const files = {};
+    for (const f of INVENTUR_FILE_FIELDS) {
+      const file = req.files[f][0];
+      files[f] = { buffer: file.buffer, name: Buffer.from(file.originalname, 'latin1').toString('utf8') };
+    }
+
+    const historie = loadInventurHistory();
+    const priorEntry = Object.entries(historie).filter(([d]) => d < stichtag).sort((a, b) => (a[0] < b[0] ? 1 : -1))[0];
+    const prior = priorEntry ? { stichtag: priorEntry[0], gesamt: priorEntry[1].gesamt } : null;
+
+    const { summary, buffer } = buildInventur(files, stichtag, prior);
+
+    const runId = new Date().toISOString().replace(/[:.]/g, '-');
+    const reportFile = `Inventur_${stichtag}_Suppstainable_${runId}.xlsx`;
+    if (!fs.existsSync(INVENTUR_REPORTS_DIR)) fs.mkdirSync(INVENTUR_REPORTS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(INVENTUR_REPORTS_DIR, reportFile), buffer);
+
+    historie[stichtag] = {
+      hauptlager: summary.hauptlager, transitAmazon: summary.transitAmazon,
+      unterwegsDhlDpd: summary.unterwegsDhlDpd, fbaSellable: summary.fbaSellable,
+      gesamt: summary.gesamt, erstelltAm: new Date().toISOString(), reportFile,
+    };
+    fs.writeFileSync(INVENTUR_HISTORY_FILE, JSON.stringify(historie, null, 2));
+
+    const runs = loadInventurRuns();
+    runs.unshift({
+      runId, timestamp: new Date().toISOString(), stichtag, reportFile,
+      quellen: Object.fromEntries(INVENTUR_FILE_FIELDS.map(f => [f, files[f].name])),
+      summary: { ...summary, unterwegsDetail: undefined },
+    });
+    fs.writeFileSync(INVENTUR_RUNS_FILE, JSON.stringify(runs, null, 2));
+
+    res.json({ ...summary, runId, reportFile });
+  } catch (err) {
+    console.error('Inventur-Fehler:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.get('/api/inventur/runs', (req, res) => {
+  res.json({ runs: loadInventurRuns(), historie: loadInventurHistory() });
+});
+
+app.get('/api/inventur/report/:file', (req, res) => {
+  const file = path.basename(req.params.file); // kein Path-Traversal
+  const full = path.join(INVENTUR_REPORTS_DIR, file);
+  if (!/^Inventur_.*\.xlsx$/.test(file) || !fs.existsSync(full)) return res.status(404).send('Report nicht gefunden');
+  const m = /^Inventur_(\d{4}-\d{2}-\d{2})_Suppstainable/.exec(file);
+  res.download(full, m ? `Inventur_${m[1]}_Suppstainable.xlsx` : file);
 });
 
 // ─── Stücklisten (Parts) Upload ───────────────────────────────────────────────
