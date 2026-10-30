@@ -256,7 +256,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .lager-family.ok       { border-left-color:var(--success); }
 .lager-family-header { padding:12px 18px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--surface2); border-bottom:1px solid var(--border); cursor:pointer; user-select:none; }
 .lager-family-title { font-family:'Libre Baskerville',serif; font-size:0.9rem; font-weight:700; color:var(--accent); flex:1; }
-.lager-warehouses { display:grid; grid-template-columns:repeat(4,1fr); border-bottom:1px solid var(--border); }
+.lager-warehouses { display:grid; grid-template-columns:repeat(3,1fr); border-bottom:1px solid var(--border); }
 .lager-wh { padding:12px 16px; border-right:1px solid var(--border); }
 .lager-wh:last-child { border-right:none; }
 .lager-wh-label { font-size:0.62rem; font-weight:700; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); margin-bottom:4px; }
@@ -328,7 +328,7 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
 .fba-block.warn     { border-left-color: var(--warn); }
 .fba-block.ok       { border-left-color: var(--success); }
 .fba-block-header { padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--surface2); border-bottom: 1px solid var(--border); }
-.fba-lager-grid { display: grid; grid-template-columns: repeat(4, 1fr); }
+.fba-lager-grid { display: grid; grid-template-columns: repeat(3, 1fr); }
 .fba-lager-cell { padding: 16px 20px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .fba-lager-cell:last-child { border-right: none; }
 .fba-lager-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; }
@@ -604,11 +604,6 @@ input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); c
               <label class="form-label">FBM Lager (Tage)</label>
               <input type="number" id="cfg_fbm_days" value="30" min="14" max="180" step="1" />
               <p class="form-hint">Standard: 50 Tage (Recovery-Stack + Sicherheit)</p>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Transit Pipeline-Min (Tage)</label>
-              <input type="number" id="cfg_transit_days" value="7" min="1" max="30" step="1" />
-              <p class="form-hint">Standard: 7 Tage (Mindest-Pipeline zu Amazon)</p>
             </div>
             <div class="form-group">
               <label class="form-label">Amazon FBA (Tage)</label>
@@ -1755,7 +1750,6 @@ async function loadSettings() {
     document.getElementById('cfg_lieferzeit').value    = cfg.lieferzeitWochen || 2;
     document.getElementById('cfg_rohware_days').value  = cfg.rohwareTargetDays || 28;
     document.getElementById('cfg_fbm_days').value      = cfg.fbmTargetDays    || 50;
-    document.getElementById('cfg_transit_days').value  = cfg.transitTargetDays || 7;
     document.getElementById('cfg_fba_days').value      = cfg.fbaTargetDays    || 35;
   } catch (e) {}
 }
@@ -1769,7 +1763,6 @@ async function saveSettings() {
     lieferzeitWochen:  document.getElementById('cfg_lieferzeit').value,
     rohwareTargetDays: document.getElementById('cfg_rohware_days').value,
     fbmTargetDays:     document.getElementById('cfg_fbm_days').value,
-    transitTargetDays: document.getElementById('cfg_transit_days').value,
     fbaTargetDays:     document.getElementById('cfg_fba_days').value,
   };
   try {
@@ -1857,12 +1850,6 @@ function renderLagerbestand(d) {
       <div class="lager-wh-sub">${rw.mainWeeks !== null ? fmtF(rw.mainWeeks) + ' Wo. Reichweite' : 'kein FBM Absatz'}</div>
     </div>`;
 
-    const whTransit = `<div class="lager-wh">
-      <div class="lager-wh-label">📦 Transit</div>
-      <div class="lager-wh-val">${fmt(stk.transit.available)}</div>
-      <div class="lager-wh-sub">bereit für Amazon</div>
-    </div>`;
-
     const whFba = stk.fba
       ? `<div class="lager-wh">
           <div class="lager-wh-label">🏪 Amazon FBA</div>
@@ -1943,7 +1930,7 @@ function renderLagerbestand(d) {
         ${stBadge(fam.status)}
         ${dem.totalPerWeek > 0 ? `<span style="font-size:0.78rem;color:var(--muted)">${fmtF(dem.totalPerWeek)} Stk/Wo gesamt</span>` : ''}
       </div>
-      <div class="lager-warehouses">${whRohware}${whMain}${whTransit}${whFba}</div>
+      <div class="lager-warehouses">${whRohware}${whMain}${whFba}</div>
       ${demandHtml}
       ${otherHtml}
     </div>`;
@@ -1968,8 +1955,8 @@ function setLagerSearch(q, ev) { _lagerSearch = q; if (ev?.target) { /* debounce
 // nur neu rendert (kein Re-Fetch nötig, Filter ändert keine Server-Zahlen).
 let wpLastData = null, wpLastBuyback = null, wpLastAbschreiben = null, wpLastMhdExtend = null;
 
-// Packungsgrößen-Filter: welche -1..-5-Größen fließen in Produktion Main/FBA,
-// Umlagerung und Versand ein. Default ohne 100g (-1), siehe Feedback: die
+// Packungsgrößen-Filter: welche -1..-5-Größen fließen in Produktion Main und
+// Versand & Produktion FBA ein. Default ohne 100g (-1), siehe Feedback: die
 // 100g-Größe soll generell nicht berücksichtigt werden. Persistiert pro
 // Browser, damit die Wahl nicht bei jedem Reload zurückspringt.
 const WP_SIZE_LABELS = { '1': '100g', '2': '200g', '3': '300g', '4': '500g', '5': '1kg' };
@@ -2029,35 +2016,43 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
   const fbaEntries = d.families.flatMap(f => (f.fbaAll || []).map(fba => ({ f, fba })))
     .filter(e => wpSelectedSizes.has(e.fba.size));
 
-  // ── Sektion 1: Versenden an Amazon ────────────────────────────────────────
-  const fbaVersenden = fbaEntries.filter(e => e.fba.recommendation > 0);
+  // ── Sektion 1: Versand & Produktion FBA ────────────────────────────────────
+  // Ein Schritt statt drei: das FNSKU-Label sitzt schon seit der Produktion
+  // drauf, es gibt kein Transit-/Umlagerungs-Zwischenlager mehr. Main-Bestand
+  // oberhalb des FBM-Puffers geht direkt raus; was fehlt, wird neu produziert.
+  // Dringlichkeit zuerst (kürzeste Amazon-Reichweite bei offenem Produktionsbedarf).
+  const fbaVersand = fbaEntries
+    .filter(e => e.fba.sendNow > 0 || e.fba.newProd > 0)
+    .sort((a, b) => (a.fba.newProd > 0 ? a.fba.fbaDaysLeft : Infinity) - (b.fba.newProd > 0 ? b.fba.fbaDaysLeft : Infinity));
   let section1 = '';
-  if (fbaVersenden.length) {
-    const rows = fbaVersenden.map(({ f, fba }) => {
+  if (fbaVersand.length) {
+    const rows = fbaVersand.map(({ f, fba }) => {
+      const p5   = f.fbmProduction.find(p => p.sku === fba.skuBase);
       const sendColor    = fba.sendNow > 0 ? 'color:var(--success);font-weight:700' : 'color:var(--muted)';
-      const missingColor = fba.stillMissing > 0 ? 'color:var(--warn);font-weight:700' : 'color:var(--muted)';
       const newProdColor = fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
       const daysColor    = fba.fbaDaysLeft < 21 ? 'color:var(--danger)' : fba.fbaDaysLeft < 42 ? 'color:var(--warn)' : 'color:var(--success)';
       const srcTag = fba.recommendedShipIn > fba.recommendedReorder
         ? '<div style="font-size:0.68rem;color:var(--muted)">Amazon-Vorschlag</div>' : '';
       return `<tr>
-        <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div>${srcTag}</td>
+        <td><strong>${fba.skuBase}</strong>${fba.urgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div>${srcTag}</td>
         <td style="text-align:right">${fba.fbaVelocity > 0 ? fba.fbaVelocity.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
         <td style="text-align:right">${fmt(fba.fbaStock)}${fba.fbaReserved > 0 ? '<div style="font-size:0.73rem;color:var(--muted)">+' + fmt(fba.fbaReserved) + ' reserv.</div>' : ''}</td>
         <td style="text-align:right;${daysColor}">${fba.fbaDaysLeft > 0 ? fba.fbaDaysLeft + ' Tage' : '—'}</td>
         <td style="text-align:right${fba.enRoute > 0 ? ';color:var(--success);font-weight:700' : ''}">${fba.enRoute > 0 ? fmt(fba.enRoute) : '—'}</td>
-        <td style="text-align:right">${fmt(fba.transitAvail)}</td>
+        <td style="text-align:right">${fmt(fba.mainAvail)} Stk.${fba.mainExpiredStk > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">− ${fmt(fba.mainExpiredStk)} abgelaufen</div>` : ''}${fba.fbmMinSource === 'fallback' ? `<div style="font-size:0.65rem;color:var(--warn)">⚠ Schätz-Puffer ${fmt(fba.fbmMinQty)} Stk.</div>` : ''}</td>
         <td style="text-align:right;${sendColor}">${fba.sendNow > 0 ? fmt(fba.sendNow) + ' Stk.' : '—'}</td>
-        <td style="text-align:right;${missingColor}">${fba.stillMissing > 0 ? fmt(fba.stillMissing) + ' Stk.' : '—'}</td>
         <td style="text-align:right;${newProdColor}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : '—'}</td>
+        <td style="text-align:right">${p5 ? p5.lotSize : '—'}</td>
+        <td style="text-align:center"><span class="badge badge-muted">${p5 ? (p5.abfuellklasse || '—') : '—'}</span></td>
       </tr>`;
     }).join('');
     section1 = `
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">✈️</span>
-        <h3>Versand an Amazon (Transit → FBA)</h3>
-        <span class="wp-badge">${fbaVersenden.length} Produkt${fbaVersenden.length !== 1 ? 'e' : ''}</span>
+        <h3>Versand & Produktion FBA</h3>
+        <span class="wp-badge">${fbaVersand.length} Produkt${fbaVersand.length !== 1 ? 'e' : ''}</span>
+        ${d.summary.fbaDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.fbaDringend} dringend</span>` : ''}
       </div>
       <div class="table-wrap"><table>
         <thead><tr>
@@ -2066,10 +2061,11 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
           <th style="text-align:right">FBA Bestand</th>
           <th style="text-align:right">Reichweite</th>
           <th style="text-align:right">Unterwegs zu Amazon</th>
-          <th style="text-align:right">Transit bereit</th>
+          <th style="text-align:right">MAIN Bestand</th>
           <th style="text-align:right">Jetzt senden</th>
-          <th style="text-align:right">Fehlmenge</th>
-          <th style="text-align:right">Noch produzieren</th>
+          <th style="text-align:right">Neu produzieren</th>
+          <th style="text-align:right">Los-Größe</th>
+          <th style="text-align:center">Abfüllklasse</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table></div>
@@ -2079,124 +2075,10 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
     <div class="wp-section">
       <div class="wp-section-header">
         <span style="font-size:1.1rem">✈️</span>
-        <h3>Versand an Amazon (Transit → FBA)</h3>
+        <h3>Versand & Produktion FBA</h3>
         <span class="wp-badge">0 Produkte</span>
       </div>
-      <div class="wp-empty">Aktuell nichts zu versenden.</div>
-    </div>`;
-  }
-
-  // ── Sektion 2: Produzieren für FBA Transit ─────────────────────────────────
-  // Dringlichkeit zuerst: kürzeste Transit-Pipeline-Reichweite (Tage bei aktueller
-  // Amazon-Verkaufsgeschwindigkeit) statt reiner Familien-Reihenfolge.
-  const fbaProd = fbaEntries
-    .filter(e => e.fba.newProd > 0 || e.fba.fromFbm > 0)
-    .sort((a, b) => (a.fba.transitReichweiteTage ?? Infinity) - (b.fba.transitReichweiteTage ?? Infinity));
-  let section2 = '';
-  if (fbaProd.length) {
-    const rows = fbaProd.map(({ f, fba }) => {
-      const p5   = f.fbmProduction.find(p => p.sku === fba.skuBase);
-      const kl   = p5 ? p5.abfuellklasse : '—';
-      const lotSz = p5 ? p5.lotSize : '—';
-      const rwLabel = fba.transitReichweiteTage !== null ? fba.transitReichweiteTage + ' Tage' : '—';
-      const rwColor = fba.transitUrgent ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)';
-      return `<tr>
-        <td><strong>${fba.skuBase}</strong>${fba.transitUrgent ? ' <span style="color:var(--danger);font-size:0.7rem;font-weight:700">⚠ DRINGEND</span>' : ''}<div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right">${fba.fbaVelocity > 0 ? fba.fbaVelocity.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
-        <td style="text-align:right;${rwColor}">${rwLabel}</td>
-        <td style="text-align:right">${fmt(fba.effRec)} Stk.<div style="font-size:0.7rem;color:var(--muted)">${fmt(fba.recommendation)} − ${fmt(fba.atFba)} FBA − ${fmt(fba.enRoute)} Transit</div></td>
-        <td style="text-align:right;color:var(--success)">${fmt(fba.transitAvail)} Stk.</td>
-        <td style="text-align:right;color:var(--warn);font-weight:700">${fmt(fba.shortfall)} Stk.</td>
-        <td style="text-align:right">${fba.fromFbm > 0 ? fmt(fba.fromFbm) + ' Stk.' : '—'}${fba.fromFbm > 0 && fba.fbmMinSource === 'fallback' ? `<div style="font-size:0.65rem;color:var(--warn)">⚠ kein MRPeasy-Mindestbestand — Schätzwert (${fmt(fba.fbmMinQty)} Stk. Puffer)</div>` : ''}</td>
-        <td style="text-align:right;${fba.newProd > 0 ? 'color:var(--danger);font-weight:700' : 'color:var(--muted)'}">${fba.newProd > 0 ? fmt(fba.newProd) + ' Stk.' : '—'}</td>
-        <td style="text-align:right">${lotSz}</td>
-        <td style="text-align:center"><span class="badge badge-muted">${kl || '—'}</span></td>
-      </tr>`;
-    }).join('');
-    section2 = `
-    <div class="wp-section">
-      <div class="wp-section-header">
-        <span style="font-size:1.1rem">🏭</span>
-        <h3>Produktion für Amazon FBA (Transit)</h3>
-        <span class="wp-badge">${fbaProd.length} Produkt${fbaProd.length !== 1 ? 'e' : ''}</span>
-        ${d.summary.transitDringend > 0 ? `<span class="wp-badge" style="background:rgba(200,60,60,0.3)">⚠ ${d.summary.transitDringend} unter Pipeline-Min</span>` : ''}
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr>
-          <th>Produkt</th>
-          <th style="text-align:right">Ø Verkauf/Tag</th>
-          <th style="text-align:right">Transit-Reichweite</th>
-          <th style="text-align:right">Noch benötigt (netto)</th>
-          <th style="text-align:right">Transit bereit</th>
-          <th style="text-align:right">Fehlmenge</th>
-          <th style="text-align:right">Aus FBM holen</th>
-          <th style="text-align:right">Neu produzieren</th>
-          <th style="text-align:right">Los-Größe</th>
-          <th style="text-align:center">Abfüllklasse</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-    </div>`;
-  } else {
-    section2 = `
-    <div class="wp-section">
-      <div class="wp-section-header">
-        <span style="font-size:1.1rem">🏭</span>
-        <h3>Produktion für Amazon FBA (Transit)</h3>
-        <span class="wp-badge">0 Produkte</span>
-      </div>
-      <div class="wp-empty">Kein FBA-Produktionsbedarf im aktuellen Zeitraum.</div>
-    </div>`;
-  }
-
-  // ── Sektion 3: Transfer aus MAIN-Lager (FBM-Überbestand → Transitlager) ────
-  // Eigene Checkliste fürs Lager: nur Umpacken/Etikettieren nötig, keine Produktion.
-  const fbaTransfer = fbaEntries.filter(e => e.fba.fromFbm > 0);
-  let section2b = '';
-  if (fbaTransfer.length) {
-    const rows = fbaTransfer.map(({ f, fba }) => {
-      const p5 = f.fbmProduction.find(p => p.sku === fba.skuBase);
-      const rwColor = !p5 || p5.reichweiteWochen === null ? 'color:var(--muted)'
-        : p5.reichweiteWochen < d.period.targetWeeks * 0.5 ? 'color:var(--danger);font-weight:700'
-        : p5.reichweiteWochen < d.period.targetWeeks       ? 'color:var(--warn);font-weight:700'
-        : 'color:var(--success)';
-      return `<tr>
-        <td><strong>${fba.skuBase}</strong><div style="font-size:0.73rem;color:var(--muted)">${f.rohwareName}</div></td>
-        <td style="text-align:right">${fmt(fba.mainAvail)} Stk.${fba.mainExpiredStk > 0 ? `<div style="font-size:0.68rem;color:var(--danger)">− ${fmt(fba.mainExpiredStk)} abgelaufen</div>` : ''}</td>
-        <td style="text-align:right">${p5 && p5.velocityPW > 0 ? p5.velocityPW.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) : '—'}</td>
-        <td style="text-align:right;${rwColor}">${p5 && p5.reichweiteWochen !== null ? p5.reichweiteWochen.toLocaleString('de', {minimumFractionDigits:1, maximumFractionDigits:1}) + ' Wo.' : '—'}</td>
-        <td style="text-align:right;color:var(--success);font-weight:700">${fmt(fba.fromFbm)} Stk.</td>
-        <td style="text-align:right">${fmt(fba.fbmMinQty)} Stk.${fba.fbmMinSource === 'fallback' ? ' <span style="font-size:0.65rem;color:var(--warn)">⚠ Schätzwert</span>' : ''}</td>
-      </tr>`;
-    }).join('');
-    section2b = `
-    <div class="wp-section">
-      <div class="wp-section-header">
-        <span style="font-size:1.1rem">🔄</span>
-        <h3>Umlagerung aus MAIN-Lager (→ Transitlager)</h3>
-        <span class="wp-badge">${fbaTransfer.length} Produkt${fbaTransfer.length !== 1 ? 'e' : ''}</span>
-      </div>
-      <div class="table-wrap"><table>
-        <thead><tr>
-          <th>Produkt</th>
-          <th style="text-align:right">MAIN Bestand</th>
-          <th style="text-align:right">Ø/Woche</th>
-          <th style="text-align:right">Reichweite</th>
-          <th style="text-align:right">Umpacken für FBA</th>
-          <th style="text-align:right">FBM-Mindestbestand (bleibt)</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-      </table></div>
-    </div>`;
-  } else {
-    section2b = `
-    <div class="wp-section">
-      <div class="wp-section-header">
-        <span style="font-size:1.1rem">🔄</span>
-        <h3>Umlagerung aus MAIN-Lager (→ Transitlager)</h3>
-        <span class="wp-badge">0 Produkte</span>
-      </div>
-      <div class="wp-empty">Kein FBA-Überbestand im MAIN-Lager zum Umlagern.</div>
+      <div class="wp-empty">Aktuell nichts zu versenden oder zu produzieren.</div>
     </div>`;
   }
 
@@ -2209,8 +2091,8 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
   });
 
   // Packungsgrößen-Filter — Chips zum Ein-/Ausblenden einzelner Größen
-  // (z.B. 100g generell ignorieren). Wirkt auf Versand/Produktion FBA/
-  // Umlagerung/Produktion Main, nicht auf Einkauf (familienweiter Rohware-Pool).
+  // (z.B. 100g generell ignorieren). Wirkt auf Versand & Produktion FBA sowie
+  // Produktion Main, nicht auf Einkauf (familienweiter Rohware-Pool).
   const sizeFilterBar = `
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:10px 16px">
       <span style="font-size:0.78rem;color:var(--muted)">Packungsgrößen:</span>
@@ -2234,7 +2116,7 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
       <div class="kpi ${zuProduzierenFbaF > 0 ? 'danger' : 'success'}">
         <div class="k-label">Produzieren FBA</div>
         <div class="k-val">${fmt(zuProduzierenFbaF)}</div>
-        <div class="k-sub">Stk. für Transit</div>
+        <div class="k-sub">Stk. für Amazon</div>
       </div>
       <div class="kpi ${zuProduzierenFbmF > 0 ? 'warn' : 'success'}">
         <div class="k-label">Produzieren FBM</div>
@@ -2599,13 +2481,13 @@ function renderWochenplanung(d, buyback, abschreiben, mhdExtend) {
   // ── Tabs: upstream → downstream (Einkauf zuerst — hier beginnt der Bedarf,
   // alles danach ist Folge davon), feste Reihenfolge, Buyback/MHD-Extend/
   // Abschreiben am Ende (eigener Rhythmus, kein wöchentlicher Handlungsbedarf
-  // wie die anderen — reine Bestandshygiene).
+  // wie die anderen — reine Bestandshygiene). Umlagerung entfällt: ohne
+  // Transit-/Zwischenlager gibt es keinen eigenen Umlagerungsschritt mehr,
+  // Versand und Produktion FBA sind zu einem Tab zusammengelegt.
   const wpTabs = [
     { key: 'einkauf',     label: 'Einkauf',           icon: '🛒', content: section4,  count: kaufenFam.length,    urgent: d.summary.rohwareDringend > 0 },
-    { key: 'umlagerung',  label: 'Umlagerung',        icon: '🔄', content: section2b, count: fbaTransfer.length },
     { key: 'prod-main',   label: 'Produktion Main',   icon: '📦', content: section3,  count: fbmLines.length },
-    { key: 'prod-fba',    label: 'Produktion FBA',    icon: '🏭', content: section2,  count: fbaProd.length,      urgent: d.summary.transitDringend > 0 },
-    { key: 'versand',     label: 'Versand',           icon: '✈️', content: section1,  count: fbaVersenden.length },
+    { key: 'versand',     label: 'Versand & Produktion FBA', icon: '✈️', content: section1, count: fbaVersand.length, urgent: d.summary.fbaDringend > 0 },
     { key: 'buyback',     label: 'Buyback',           icon: '♻️', content: section6,  count: buyback?.candidates?.length || 0 },
     { key: 'mhd-extend',  label: 'MHD Extend',        icon: '🏷️', content: section8,  count: mhdExtend?.items?.length || 0,   urgent: (mhdExtend?.items?.length || 0) > 0 },
     { key: 'abschreiben', label: 'Abschreiben',       icon: '🗑️', content: section7,  count: abschreiben?.items?.length || 0, urgent: (abschreiben?.items?.length || 0) > 0 },
@@ -2643,9 +2525,8 @@ async function jumpToWpTab(tabKey) {
 // dieselben Zahlen/Kriterien gelten und nichts doppelt gepflegt werden muss.
 const SKU_TODO_DEFS = {
   einkauf:     { label: 'Einkauf',          icon: '🛒', tabKey: 'einkauf' },
-  umlagerung:  { label: 'Umlagerung',       icon: '🔄', tabKey: 'umlagerung' },
   'prod-main': { label: 'Produktion Main',  icon: '📦', tabKey: 'prod-main' },
-  'prod-fba':  { label: 'Produktion FBA',   icon: '🏭', tabKey: 'prod-fba' },
+  'prod-fba':  { label: 'Produktion FBA',   icon: '🏭', tabKey: 'versand' },
   versand:     { label: 'Versand',          icon: '✈️', tabKey: 'versand' },
   buyback:     { label: 'Buyback',          icon: '♻️', tabKey: 'buyback' },
 };
@@ -2668,8 +2549,7 @@ function buildSkuTodoMap(d, buyback) {
       if (p.prodNeed > 0) add(p.sku, 'prod-main', false);
 
     for (const fba of f.fbaAll || []) {
-      if (fba.fromFbm > 0)        add(fba.skuBase, 'umlagerung', false);
-      if (fba.newProd > 0)        add(fba.skuBase, 'prod-fba', fba.transitUrgent);
+      if (fba.newProd > 0)        add(fba.skuBase, 'prod-fba', fba.urgent);
       if (fba.recommendation > 0) add(fba.skuBase, 'versand', fba.fbaDaysLeft > 0 && fba.fbaDaysLeft < 21);
     }
   }
@@ -2825,7 +2705,7 @@ function renderFbaPlanung(d) {
       <div class="kpi accent-bg"><div class="k-label">FBA Artikel</div><div class="k-val">${d.summary.total}</div><div class="k-sub">importiert</div></div>
       <div class="kpi ${d.summary.kritisch > 0 ? 'danger' : 'success'}"><div class="k-label">Kritisch</div><div class="k-val">${d.summary.kritisch}</div><div class="k-sub">Pipeline &lt; ${d.leadTimes.totalDays} Tage</div></div>
       <div class="kpi ${d.summary.warn > 0 ? 'warn' : 'success'}"><div class="k-label">Warnung</div><div class="k-val">${d.summary.warn}</div><div class="k-sub">Pipeline &lt; ${d.leadTimes.totalDays * 2} Tage</div></div>
-      <div class="kpi ${d.summary.zuVersenden > 0 ? 'warn' : ''}"><div class="k-label">Jetzt versenden</div><div class="k-val">${fmt(d.summary.zuVersenden)}</div><div class="k-sub">Stk. aus Transit</div></div>
+      <div class="kpi ${d.summary.zuVersenden > 0 ? 'warn' : ''}"><div class="k-label">Jetzt versenden</div><div class="k-val">${fmt(d.summary.zuVersenden)}</div><div class="k-sub">Stk. noch vorbereiten</div></div>
       <div class="kpi ${d.summary.zuProduzieren > 0 ? 'danger' : 'success'}"><div class="k-label">Produzieren FBA</div><div class="k-val">${fmt(d.summary.zuProduzieren)}</div><div class="k-sub">Stk. diese Woche</div></div>
     </div>`;
 
@@ -2866,11 +2746,6 @@ function renderFbaPlanung(d) {
           <div class="fba-lager-sub">verschickt, Amazon bucht ein</div>
         </div>
         <div class="fba-lager-cell">
-          <div class="fba-lager-title">📦 Eigenes Transitlager</div>
-          <div class="fba-lager-val" style="${item.transitStock === 0 && item.nochZuSenden > 0 ? 'color:var(--danger)' : ''}">${fmt(item.transitStock)}</div>
-          <div class="fba-lager-sub">FBA-Sticker, versandbereit</div>
-        </div>
-        <div class="fba-lager-cell">
           <div class="fba-lager-title">🏭 MAIN Lager</div>
           <div class="fba-lager-val">${fmt(item.mainStock)}</div>
           <div class="fba-lager-sub">Min FBM: ${fmt(item.fbmMinQty)} Stk.${item.mainOverstock > 0 ? '<br><span style="color:var(--success)">+'+fmt(item.mainOverstock)+' für FBA</span>' : ''}</div>
@@ -2902,12 +2777,12 @@ function renderFbaPlanung(d) {
         <div>
           <div class="fba-action-label">Neu produzieren für FBA</div>
           <div class="fba-action-val ${item.zuProduzierenFba > 0 ? 'danger' : 'success'}">${item.zuProduzierenFba > 0 ? fmt(item.zuProduzierenFba) + ' Stk.' : '✓ Kein Bedarf'}</div>
-          <div style="font-size:0.7rem;color:var(--muted)">FBA-Etikett + Transit + Amazon</div>
+          <div style="font-size:0.7rem;color:var(--muted)">FBA-Etikett + Versand</div>
         </div>
         <div>
           <div class="fba-action-label">Pipeline gesamt</div>
           <div class="fba-action-val">${fmt(item.pipelineTotal)} Stk.</div>
-          <div style="font-size:0.7rem;color:var(--muted)">Transit + Versandweg + FBA${pDays ? ' · ' + pDays + ' Tage' : ''}</div>
+          <div style="font-size:0.7rem;color:var(--muted)">Versandweg + FBA${pDays ? ' · ' + pDays + ' Tage' : ''}</div>
         </div>
       </div>
     </div>`;
@@ -2963,7 +2838,6 @@ function renderAktiveArtikel(d) {
       <td style="font-size:0.8rem;color:var(--muted);max-width:200px">${a.name.substring(0,40)}</td>
       <td><span class="badge badge-muted" style="font-size:0.7rem">${a.group||'—'}</span></td>
       <td style="text-align:right;${a.unterMin ? 'color:var(--danger);font-weight:700' : ''}">${fmt(a.mainStock)} <span style="color:var(--muted);font-size:0.72rem">${a.unit}</span></td>
-      <td style="text-align:right">${fmt(a.transitStock)}</td>
       <td style="text-align:right">${a.fbaStock !== null ? fmt(a.fbaStock) : '<span style="color:var(--muted)">—</span>'}</td>
       <td style="text-align:right;font-weight:700;color:var(--accent)">${fmt(a.totalStock)}</td>
       <td style="text-align:right;color:var(--muted)">${a.minQty > 0 ? fmt(a.minQty) : '—'}</td>
@@ -2977,7 +2851,6 @@ function renderAktiveArtikel(d) {
           <thead><tr>
             <th>Status</th><th>Artikelnr.</th><th>Name</th><th>Gruppe</th>
             <th style="text-align:right">MAIN Lager</th>
-            <th style="text-align:right">Transit</th>
             <th style="text-align:right">Amazon FBA</th>
             <th style="text-align:right">Total</th>
             <th style="text-align:right">Mindestbestand</th>

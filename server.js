@@ -171,7 +171,6 @@ app.get('/api/config', (req, res) => {
     // Lager-Zielreichweiten (Tage)
     rohwareTargetDays: cfg.rohwareTargetDays || 28,
     fbmTargetDays:     cfg.fbmTargetDays     || 30,
-    transitTargetDays: cfg.transitTargetDays || 7,
     fbaTargetDays:     cfg.fbaTargetDays     || 35,
     configured:        !!(cfg.shopifyDomain && cfg.shopifyToken),
     deployedAt:        SERVER_START,
@@ -182,7 +181,7 @@ app.post('/api/config', (req, res) => {
   const cfg = loadConfig();
   const { shopifyDomain, shopifyToken, shopifyClientId, shopifyClientSecret,
           targetMonths, forecastDays, lieferzeitWochen,
-          rohwareTargetDays, fbmTargetDays, transitTargetDays, fbaTargetDays } = req.body;
+          rohwareTargetDays, fbmTargetDays, fbaTargetDays } = req.body;
 
   if (shopifyDomain)       cfg.shopifyDomain       = shopifyDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
   if (shopifyClientId)     cfg.shopifyClientId     = shopifyClientId;
@@ -193,7 +192,6 @@ app.post('/api/config', (req, res) => {
   if (lieferzeitWochen)    cfg.lieferzeitWochen    = parseFloat(lieferzeitWochen);
   if (rohwareTargetDays)   cfg.rohwareTargetDays   = parseInt(rohwareTargetDays);
   if (fbmTargetDays)       cfg.fbmTargetDays       = parseInt(fbmTargetDays);
-  if (transitTargetDays)   cfg.transitTargetDays   = parseInt(transitTargetDays);
   if (fbaTargetDays)       cfg.fbaTargetDays       = parseInt(fbaTargetDays);
 
   saveConfig(cfg);
@@ -361,7 +359,6 @@ function parseMrpCsv(buffer) {
 // ─── MRPeasy CSV Upload ───────────────────────────────────────────────────────
 
 const STOCK_FILE         = path.join(DATA_DIR, 'stock.json');
-const TRANSIT_STOCK_FILE = path.join(DATA_DIR, 'stock-transit.json');
 const STOCK_FULL_FILE    = path.join(DATA_DIR, 'stock-full.json');
 const FBA_STOCK_FILE     = path.join(DATA_DIR, 'fba-stock.json');
 const FBA_SHIPMENTS_FILE = path.join(DATA_DIR, 'fba-shipments.json');
@@ -375,10 +372,6 @@ function loadStock() {
 function loadStockFull() {
   try { return JSON.parse(fs.readFileSync(STOCK_FULL_FILE, 'utf8')); }
   catch { return { items: [] }; }
-}
-function loadTransitStock() {
-  try { return JSON.parse(fs.readFileSync(TRANSIT_STOCK_FILE, 'utf8')); }
-  catch { return {}; }
 }
 function loadFbaStock() {
   try { return JSON.parse(fs.readFileSync(FBA_STOCK_FILE, 'utf8')); }
@@ -427,9 +420,8 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
     const IGNORIERTE_GRUPPEN = new Set(['Beutel', 'Etiketten', 'Kartons']);
     const pf = v => parseFloat((v || '0').replace(',', '.')) || 0;
 
-    // stockMain / stockTransit: gefiltert für Planungsberechnungen
+    // stockMain: gefiltert für Planungsberechnungen
     const stockMain    = {};
-    const stockTransit = {};
     // stockFull: vollständig inkl. Packmittel + gewichtete Ø-Kosten für Inventur-Export
     const stockFull    = {}; // key = "standort|SKU"
 
@@ -467,17 +459,19 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
         stockFull[fullKey].costQty += inStock;
       }
 
-      // ── stockMain / stockTransit: Packmittel ausfiltern, für Planung ──
+      // ── stockMain: Packmittel ausfiltern, für Planung ── Kein "Transit Amazon"-
+      // Sonderfall mehr: seit FNSKU-Etiketten direkt bei der Produktion aufs
+      // Label kommen, gibt es keine separate Zwischenlager-Stufe mehr — sollte
+      // der Standort in einem Export doch nochmal auftauchen, zählt er einfach
+      // als normaler Main-Bestand statt eigens behandelt zu werden.
       if (IGNORIERTE_GRUPPEN.has(gruppe)) continue;
-      const target = standort === 'Transit Amazon' ? stockTransit : stockMain;
-      if (!target[sku]) target[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
-      target[sku].inStock   += inStock;
-      target[sku].available += avail;
+      if (!stockMain[sku]) stockMain[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
+      stockMain[sku].inStock   += inStock;
+      stockMain[sku].available += avail;
     }
 
     const now = new Date().toISOString();
-    fs.writeFileSync(STOCK_FILE,         JSON.stringify({ updatedAt: now, items: stockMain    }, null, 2));
-    fs.writeFileSync(TRANSIT_STOCK_FILE, JSON.stringify({ updatedAt: now, items: stockTransit }, null, 2));
+    fs.writeFileSync(STOCK_FILE, JSON.stringify({ updatedAt: now, items: stockMain }, null, 2));
 
     // stock-full: gewichteten Ø-Einheitspreis berechnen und speichern
     const fullItemsArr = Object.values(stockFull).map(it => {
@@ -496,10 +490,8 @@ app.post('/api/upload-stock', upload.single('file'), (req, res) => {
 
     res.json({
       ok: true,
-      skuCount:        Object.keys(stockMain).length,
-      mainSkuCount:    Object.keys(stockMain).length,
-      transitSkuCount: Object.keys(stockTransit).length,
-      transitSkus:     Object.keys(stockTransit),
+      skuCount:     Object.keys(stockMain).length,
+      mainSkuCount: Object.keys(stockMain).length,
       language: isDE ? 'DE' : 'EN',
     });
   } catch (e) {
@@ -1416,47 +1408,6 @@ app.get('/api/log', (req, res) => {
   res.json(loadLog());
 });
 
-// ─── Transit Lager Upload ─────────────────────────────────────────────────────
-
-app.post('/api/upload-stock-transit', upload.single('file'), (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: 'Keine Datei' });
-    const text = req.file.buffer.toString('utf8').replace(/^﻿/, '');
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    if (!lines.length) return res.status(400).json({ error: 'Leere Datei' });
-    const parseRow = l => l.split(';').map(v => v.replace(/^"|"$/g, '').trim());
-    const headers = parseRow(lines[0]);
-    const idx = name => headers.indexOf(name);
-    const isDE = headers.includes('Artikelnr.');
-    const iSku    = idx(isDE ? 'Artikelnr.'        : 'Part No.');
-    const iStock  = idx(isDE ? 'Auf Lager'          : 'In stock');
-    const iAvail  = idx(isDE ? 'Verfügbar'          : 'Available');
-    const iName   = idx(isDE ? 'Artikelbezeichnung' : 'Part description');
-    const iUnit   = idx(isDE ? 'Maßeinheit'         : 'UoM');
-    const iWeight = idx('Gewicht in kg');
-    if (iSku === -1 || iStock === -1) return res.status(400).json({ error: 'Unbekanntes Format' });
-    const stock = {};
-    for (let i = 1; i < lines.length; i++) {
-      const cols = parseRow(lines[i]);
-      const sku = cols[iSku];
-      if (!sku) continue;
-      const inStock = parseFloat((cols[iStock] || '0').replace(',', '.')) || 0;
-      const avail   = parseFloat((cols[iAvail]  || '0').replace(',', '.')) || 0;
-      const weight  = parseFloat((cols[iWeight] || '0').replace(',', '.')) || 0;
-      if (!stock[sku]) stock[sku] = { sku, name: cols[iName] || '', unit: cols[iUnit] || 'Stk.', inStock: 0, available: 0, weightKg: weight };
-      stock[sku].inStock   += inStock;
-      stock[sku].available += avail;
-    }
-    fs.writeFileSync(TRANSIT_STOCK_FILE, JSON.stringify({ updatedAt: new Date().toISOString(), items: stock }, null, 2));
-    res.json({ ok: true, skuCount: Object.keys(stock).length });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-app.get('/api/stock-transit', (req, res) => res.json(loadTransitStock()));
-
 // ─── Sellerboard FBA Lager Upload (XLSX) ─────────────────────────────────────
 
 app.post('/api/upload-sellerboard-lager', upload.single('file'), (req, res) => {
@@ -1617,23 +1568,22 @@ function isLotExpired(l, today) {
 }
 
 // Pro SKU die abgelaufene Menge aus dem Chargen-Import (stock-lots.json),
-// getrennt nach Standort-Eimer wie im Stock-Import (/api/upload-stock):
-// "Amazon FBA" wird dort komplett ignoriert (keine Chargen-Sicht bei Amazon
-// möglich, Sellerboard liefert keine MHD-Daten), "Transit Amazon" landet im
-// Transit-Bucket, alles andere (Main site, Lagerorte etc.) im Main-Bucket.
+// analog zum Stock-Import (/api/upload-stock): "Amazon FBA" wird komplett
+// ignoriert (keine Chargen-Sicht bei Amazon möglich, Sellerboard liefert
+// keine MHD-Daten), alles andere (Main site, "Transit Amazon" falls doch
+// noch im Export, Lagerorte etc.) zählt als Main-Bestand.
 function computeExpiredStockMaps() {
   const lots  = (loadStockLots().lots) || {};
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const main = {}, transit = {};
+  const main = {};
   for (const [sku, lotArr] of Object.entries(lots)) {
     for (const l of lotArr) {
       if (!isLotExpired(l, today)) continue;
       if (l.standort === 'Amazon FBA') continue;
-      const bucket = l.standort === 'Transit Amazon' ? transit : main;
-      bucket[sku] = (bucket[sku] || 0) + (l.verfuegbar || 0);
+      main[sku] = (main[sku] || 0) + (l.verfuegbar || 0);
     }
   }
-  return { main, transit };
+  return { main };
 }
 
 app.post('/api/upload-purchase-orders', upload.single('file'), (req, res) => {
@@ -2043,23 +1993,21 @@ const FBM_MIN_FALLBACK_WEEKS = 2;
 app.get('/api/fba-planung', (req, res) => {
   try {
     const cfg       = loadConfig();
-    const fbaTargetDays     = cfg.fbaTargetDays     || 35;
-    const transitTargetDays = cfg.transitTargetDays || 7;
+    const fbaTargetDays = cfg.fbaTargetDays || 35;
 
     const fbaData      = loadFbaStock();
     const fbaItems     = fbaData.items || {};
     const mainData     = loadStock();
     const mainItems    = mainData.items || {};
-    const transitData  = loadTransitStock();
-    const transitItems = transitData.items || {};
     const artData      = loadArticles();
     const artItems     = artData.items || {};
     const shipData     = loadFbaShipments();
     const inTransit    = shipData.inTransit || {};
 
     // Datenbasis (eine Quelle pro Lager):
-    // MRPeasy "Main site"      → mainItems (FBM-Fertigware + Rohware)
-    // MRPeasy "Transit Amazon" → transitItems (FBA-Sticker drauf, noch bei uns, noch nicht versendet)
+    // MRPeasy "Main site"      → mainItems (FBM-Fertigware + Rohware, FNSKU-Label
+    //                             sitzt schon seit der Produktion drauf — kein
+    //                             separates Transit-/Zwischenlager mehr nötig)
     // MRPeasy "Amazon FBA"     → ignoriert (Umbuchung damit Ware aus ERP verschwindet)
     // Sellerboard Shipments    → inTransit (versendet, auf dem Weg zu Amazon)
     // Sellerboard Lager        → fbaStock (aktuell im Amazon Warehouse verfügbar)
@@ -2069,24 +2017,22 @@ app.get('/api/fba-planung', (req, res) => {
     for (const [skuFba, fba] of Object.entries(fbaItems)) {
       const skuBase    = skuFba.replace(/-FBA$/i, '');
       const main       = mainItems[skuBase]    || { available: 0, inStock: 0 };
-      const transit    = transitItems[skuBase] || { available: 0 };
       const art        = artItems[skuBase]     || null;
 
-      const transitStock = transit.available;   // MRPeasy Transit Amazon: bei uns, FBA-Sticker drauf
       const trData       = inTransit[skuFba] || { shipped: 0, received: 0 };
       const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0)); // Sellerboard Shipments: auf dem Weg
       const velocity     = fba.velocity > 0 ? fba.velocity
                          : (fba.daysLeft > 0 && fba.fbaStock > 0 ? fba.fbaStock / fba.daysLeft : 0);
 
-      // Pipeline = FBA Transit (MRPeasy) + unterwegs zu Amazon (Shipments) + im Amazon Warehouse (Sellerboard)
-      const pipelineTotal = fba.fbaStock + enRoute + transitStock;
+      // Pipeline = unterwegs zu Amazon (Shipments) + im Amazon Warehouse (Sellerboard)
+      const pipelineTotal = fba.fbaStock + enRoute;
       const pipelineDays  = velocity > 0 ? pipelineTotal / velocity : 999;
 
       // Was noch aus MAIN vorbereitet + versendet werden muss
       // Höherer Wert aus Sellerboards eigener Empfehlung und Amazons offiziellem
       // Ship-In-Vorschlag — siehe gleicher Fix in /api/wochenplanung.
       const recommendation   = Math.max(fba.recommendedReorder || 0, fba.recommendedShipIn || 0);
-      const nochZuSenden     = Math.max(0, recommendation - enRoute - transitStock);
+      const nochZuSenden     = Math.max(0, recommendation - enRoute);
 
       // Aus FBM-Überbestand entnehmen?
       const fbmMinQty        = art ? (art.minQty || 0) : 0;
@@ -2106,7 +2052,6 @@ app.get('/api/fba-planung', (req, res) => {
         fbaStock:      fba.fbaStock,
         velocity:      +velocity.toFixed(2),
         daysLeft:      fba.daysLeft,
-        transitStock,                        // MRPeasy Transit Amazon (bei uns, noch nicht versendet)
         enRoute,                             // Sellerboard Shipments (versendet, unterwegs)
         mainStock:     main.available,
         fbmMinQty,
@@ -2126,7 +2071,7 @@ app.get('/api/fba-planung', (req, res) => {
 
     res.json({
       updatedAt: { fbaStock: fbaData.updatedAt || null, main: mainData.updatedAt || null, shipments: shipData.updatedAt || null },
-      leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL, fbaTargetDays, transitTargetDays },
+      leadTimes: { prodDays: FBA_PROD_DAYS, amazonDays: FBA_AMAZON_DAYS, totalDays: FBA_LEAD_TOTAL, fbaTargetDays },
       summary: {
         total:    result.length,
         kritisch: result.filter(r => r.status === 'kritisch').length,
@@ -2151,8 +2096,6 @@ app.get('/api/active-articles', (req, res) => {
     const artItems     = artData.items || {};
     const mainData     = loadStock();
     const mainItems    = mainData.items || {};
-    const transitData  = loadTransitStock();
-    const transitItems = transitData.items || {};
     const fbaData      = loadFbaStock();
     const fbaItems     = fbaData.items || {};
 
@@ -2161,17 +2104,15 @@ app.get('/api/active-articles', (req, res) => {
       if (!art.active) continue;
       const skuFba      = nr + '-FBA';
       const main        = mainItems[nr]      || { available: 0 };
-      const transit     = transitItems[nr]   || { available: 0 };
       const fba         = fbaItems[skuFba]   || null;
       const mainStock   = main.available    || 0;
-      const transitStock = transit.available || 0;
       const fbaStock    = fba ? fba.fbaStock : null;
-      const totalStock  = mainStock + transitStock + (fbaStock || 0);
+      const totalStock  = mainStock + (fbaStock || 0);
       const unterMin    = art.minQty > 0 && mainStock < art.minQty;
 
       result.push({
         nr, name: art.name, group: art.group || '', unit: art.unit || '',
-        mainStock, transitStock, fbaStock, hasFba: !!fba, totalStock,
+        mainStock, fbaStock, hasFba: !!fba, totalStock,
         minQty: art.minQty || 0, unterMin,
         status: totalStock === 0 ? 'nullbestand' : 'ok',
       });
@@ -2187,7 +2128,7 @@ app.get('/api/active-articles', (req, res) => {
       total:       result.length,
       nullbestand: result.filter(r => r.status === 'nullbestand').length,
       unterMin:    result.filter(r => r.unterMin).length,
-      updatedAt:   { articles: artData.updatedAt || null, main: mainData.updatedAt || null, transit: transitData.updatedAt || null, fba: fbaData.updatedAt || null },
+      updatedAt:   { articles: artData.updatedAt || null, main: mainData.updatedAt || null, fba: fbaData.updatedAt || null },
       items: result,
     });
   } catch (e) {
@@ -2218,8 +2159,6 @@ app.get('/api/lagerbestand', async (req, res) => {
     const artItems     = artData.items || {};
     const mainData     = loadStock();
     const mainItems    = mainData.items || {};
-    const transitData  = loadTransitStock();
-    const transitItems = transitData.items || {};
     const fbaData      = loadFbaStock();
     const fbaItems     = fbaData.items || {};
     const partsData    = loadParts();
@@ -2282,8 +2221,7 @@ app.get('/api/lagerbestand', async (req, res) => {
     for (const fam of Object.values(families)) {
       const primarySku = fam.familyKey + '-5';  // 1kg = Basiseinheit
       const fba        = fam.fbaSku ? fbaItems[fam.fbaSku] : null;
-      const main       = mainItems[primarySku]    || { available: 0, inStock: 0 };
-      const transit    = transitItems[primarySku] || { available: 0 };
+      const main       = mainItems[primarySku] || { available: 0, inStock: 0 };
       const rawArt     = fam.rohwareNr ? artItems[fam.rohwareNr] : null;
       const artTarget  = skuTargets[primarySku] || {};
       const fbmTargetWeeks = artTarget.targetMonths ? artTarget.targetMonths * 4.33 : FBM_TARGET_WEEKS;
@@ -2336,7 +2274,6 @@ app.get('/api/lagerbestand', async (req, res) => {
         stock: {
           rohware:  rawArt ? { sku: fam.rohwareNr, name: rawArt.name, available: rawArt.available, unit: rawArt.unit } : null,
           main:     { available: main.available, inStock: main.inStock },
-          transit:  { available: transit.available },
           fba:      fba ? { available: fba.fbaStock, daysLeft: fba.daysLeft, velocity: fba.velocity || 0 } : null,
         },
         demand: {
@@ -2398,7 +2335,6 @@ async function buildWochenplanungData(reqDays) {
     const weeks             = days / 7;
     const fbmTargetDays     = cfg.fbmTargetDays     || 30;
     const rohwareTargetDays = cfg.rohwareTargetDays || 28;
-    const transitTargetDays = cfg.transitTargetDays || 7;
     const fbaTargetDays     = cfg.fbaTargetDays     || 35;
     const targetWeeks       = fbmTargetDays / 7;
 
@@ -2406,8 +2342,6 @@ async function buildWochenplanungData(reqDays) {
     const artItems     = artData.items || {};
     const mainData     = loadStock();
     const mainItems    = mainData.items || {};
-    const transitData  = loadTransitStock();
-    const transitItems = transitData.items || {};
     const fbaData      = loadFbaStock();
     const fbaItems     = fbaData.items || {};
     const shipData     = loadFbaShipments();
@@ -2418,14 +2352,13 @@ async function buildWochenplanungData(reqDays) {
     const poIncoming   = poData.incoming || {};
 
     // Abgelaufene Chargen dürfen nirgends als verfügbar gelten — weder für den
-    // Einkauf-Pool noch für Produktions-/Versand-Entscheidungen. Nur für Main-
-    // und Transit-Lager möglich, da nur die aus dem MRPeasy-Chargen-Import
-    // (stock-lots.json) stammen; Amazon-FBA-Bestand kommt aus Sellerboard, das
+    // Einkauf-Pool noch für Produktions-/Versand-Entscheidungen. Nur fürs
+    // Main-Lager möglich, da nur das aus dem MRPeasy-Chargen-Import
+    // (stock-lots.json) stammt; Amazon-FBA-Bestand kommt aus Sellerboard, das
     // keine Chargen-/MHD-Daten liefert und daher hier unverändert bleibt.
     const expiredStock = computeExpiredStockMaps();
-    const mainAvailOf     = sku => Math.max(0, ((mainItems[sku]    || {}).available || 0) - (expiredStock.main[sku]     || 0));
-    const transitAvailOf  = sku => Math.max(0, ((transitItems[sku] || {}).available || 0) - (expiredStock.transit[sku]  || 0));
-    const mainExpiredOf   = sku => expiredStock.main[sku] || 0;
+    const mainAvailOf   = sku => Math.max(0, ((mainItems[sku] || {}).available || 0) - (expiredStock.main[sku] || 0));
+    const mainExpiredOf = sku => expiredStock.main[sku] || 0;
 
     // Shopify Demand aggregieren (einmalig vor der Familienloop)
     let lineItems = [];
@@ -2543,7 +2476,6 @@ async function buildWochenplanungData(reqDays) {
 
         const primarySku   = prefix + '-' + sz;
         const art          = artItems[primarySku];
-        const transitAvail = transitAvailOf(primarySku);
         const mainAvail    = mainAvailOf(primarySku);
         // Kein gepflegter Mindestbestand in MRPeasy (minQty=0)? Dann NICHT den
         // kompletten Main-Bestand als "Überbestand" für FBA freigeben — das würde
@@ -2552,7 +2484,10 @@ async function buildWochenplanungData(reqDays) {
         const fbmProd5     = fbmProduction.find(p => p.sku === primarySku);
         const fbmFallbackMin = fbmProd5 ? fbmProd5.velocityPW * FBM_MIN_FALLBACK_WEEKS : 0;
         const fbmMinQty    = art && art.minQty > 0 ? art.minQty : fbmFallbackMin;
-        const fbmOverstock = Math.max(0, mainAvail - fbmMinQty);
+        // Main-Bestand oberhalb des FBM-Sicherheitspuffers ist sofort FBA-
+        // versandfertig — das FNSKU-Label sitzt schon seit der Produktion drauf,
+        // es gibt kein separates Transit-/Umlagerungs-Zwischenlager mehr.
+        const sendableNow = Math.max(0, mainAvail - fbmMinQty);
         // Höherer Wert aus Sellerboards eigener Empfehlung und Amazons
         // offiziellem Ship-In-Vorschlag — beide sind gültige Signale.
         const recommendation = Math.max(fbaItem.recommendedReorder || 0, fbaItem.recommendedShipIn || 0);
@@ -2560,18 +2495,13 @@ async function buildWochenplanungData(reqDays) {
         const enRoute      = Math.max(0, (trData.shipped || 0) - (trData.received || 0));
         const atFba        = (fbaItem.fbaStock || 0) + (fbaItem.fbaReserved || 0);
         const effRec       = Math.max(0, recommendation - atFba - enRoute);
-        const shortfall    = Math.max(0, effRec - transitAvail);
-        const fromFbm      = Math.min(shortfall, fbmOverstock);
-        const newProd      = Math.max(0, shortfall - fromFbm);
-        const sendNow      = Math.min(transitAvail, effRec);
-        const stillMissing = Math.max(0, effRec - sendNow);
+        const sendNow      = Math.min(sendableNow, effRec);
+        const newProd      = Math.max(0, effRec - sendNow);
 
-        // Transit-Pipeline-Reichweite: wie viele Tage hält der bereits fertig
-        // abgepackte Transit-Bestand bei aktueller Amazon-Verkaufsgeschwindigkeit?
-        // Unter transitTargetDays ("Mindest-Pipeline zu Amazon") wird's dringend.
-        const velocityPD        = fbaItem.velocity || 0;
-        const transitReichweiteTage = velocityPD > 0 ? +(transitAvail / velocityPD).toFixed(1) : null;
-        const transitUrgent     = newProd > 0 && transitReichweiteTage !== null && transitReichweiteTage < transitTargetDays;
+        // Dringend = es muss noch produziert werden UND Amazons eigener Bestand
+        // reicht nur noch für < 21 Tage (gleiche Schwelle wie die Lagerampel
+        // in der Versand-Tabelle).
+        const urgent = newProd > 0 && fbaItem.daysLeft > 0 && fbaItem.daysLeft < 21;
 
         totalFbaKg += newProd * (art ? (art.weightKg || 1) : 1);
 
@@ -2583,24 +2513,20 @@ async function buildWochenplanungData(reqDays) {
           fbaReserved:    fbaItem.fbaReserved || 0,
           fbaDaysLeft:    fbaItem.daysLeft || 0,
           fbaVelocity:    fbaItem.velocity || 0,
-          transitAvail,
-          transitReichweiteTage,
-          transitUrgent,
           enRoute,
           atFba,
           mainAvail,
           mainExpiredStk: mainExpiredOf(primarySku),
+          sendableNow,
           recommendedReorder: fbaItem.recommendedReorder || 0,
           recommendedShipIn:  fbaItem.recommendedShipIn || 0,
           recommendation,
           effRec,
-          shortfall,
           sendNow,
-          stillMissing,
-          fromFbm,
+          newProd,
+          urgent,
           fbmMinQty:    +fbmMinQty.toFixed(1),
           fbmMinSource: art && art.minQty > 0 ? 'mrpeasy' : 'fallback',
-          newProd,
         });
       }
 
@@ -2717,7 +2643,7 @@ async function buildWochenplanungData(reqDays) {
       ueberfaelligeBestellungen: families.filter(f => f.einkauf.hasOverdue).length,
       rohwareDringend:   families.filter(f => f.einkauf.rohwareUrgent).length,
       rohwarePoolLeer:   families.filter(f => f.einkauf.poolEmpty).length,
-      transitDringend:   families.reduce((s, f) => s + f.fbaAll.filter(x => x.transitUrgent).length, 0),
+      fbaDringend:       families.reduce((s, f) => s + f.fbaAll.filter(x => x.urgent).length, 0),
     };
 
     return {
@@ -2772,35 +2698,19 @@ app.get('/api/export/wochenplanung', async (req, res) => {
       'Reichweite (Tage)', 'Dringlichkeit',
     ], einkaufRows, [14, 40, 16, 18, 18, 16, 14]);
 
-    // ── Tab 2: Versenden an Amazon (Transit → FBA) ──
-    const versendenRows = data.families.flatMap(f => f.fbaAll
-      .filter(x => x.sendNow > 0)
-      .map(x => [x.skuBase, f.rohwareName, x.sendNow, x.transitAvail, x.stillMissing, '']));
-    addSheet('Versenden', [
-      'SKU', 'Produkt', 'Jetzt senden (Stk.)', 'Transit bereit (Stk.)', 'Fehlmenge (Stk.)', 'Dringlichkeit',
-    ], versendenRows, [16, 36, 18, 18, 16, 14]);
-
-    // ── Tab 3: Transfer aus MAIN-Lager (→ Transitlager) ──
-    const transferRows = data.families.flatMap(f => f.fbaAll
-      .filter(x => x.fromFbm > 0)
-      .map(x => [x.skuBase, f.rohwareName, x.mainAvail, x.fromFbm, x.fbmMinQty,
-        x.fbmMinSource === 'fallback' ? 'Schätzwert (kein MRPeasy-Mindestbestand)' : '']));
-    addSheet('Transfer', [
-      'SKU', 'Produkt', 'MAIN Bestand (Stk.)', 'Umpacken für FBA (Stk.)', 'FBM-Mindestbestand (bleibt)', 'Hinweis',
-    ], transferRows, [16, 36, 18, 20, 22, 32]);
-
-    // ── Tab 4: Produzieren für FBA-Transit ──
-    const produzierenFbaRows = data.families.flatMap(f => f.fbaAll
-      .filter(x => x.newProd > 0)
+    // ── Tab 2: Versand & Produktion FBA ── (ein Schritt: FNSKU sitzt schon seit
+    // der Produktion auf dem Label, kein Zwischenlager/Umlagerung mehr nötig)
+    const versandFbaRows = data.families.flatMap(f => f.fbaAll
+      .filter(x => x.sendNow > 0 || x.newProd > 0)
       .map(x => {
         const p5 = f.fbmProduction.find(p => p.sku === x.skuBase);
-        return [x.skuBase, f.rohwareName, x.newProd, p5 ? p5.lotSize : '', p5 ? p5.abfuellklasse : '',
-          x.transitReichweiteTage ?? '', dringend(x.transitUrgent)];
+        return [x.skuBase, f.rohwareName, x.mainAvail, x.fbmMinQty, x.sendNow, x.newProd,
+          p5 ? p5.lotSize : '', p5 ? p5.abfuellklasse : '', dringend(x.urgent)];
       }));
-    addSheet('Produzieren FBA', [
-      'SKU', 'Produkt', 'Neu produzieren (Stk.)', 'Los-Größe', 'Abfüllklasse',
-      'Transit-Reichweite (Tage)', 'Dringlichkeit',
-    ], produzierenFbaRows, [16, 36, 18, 12, 14, 20, 14]);
+    addSheet('Versand & Produktion FBA', [
+      'SKU', 'Produkt', 'MAIN Bestand (Stk.)', 'FBM-Mindestbestand (bleibt)', 'Jetzt senden (Stk.)',
+      'Neu produzieren (Stk.)', 'Los-Größe', 'Abfüllklasse', 'Dringlichkeit',
+    ], versandFbaRows, [16, 36, 18, 22, 18, 20, 12, 14, 14]);
 
     // ── Tab 5: Produzieren für FBM (MAIN Lager) ──
     const produzierenFbmRows = data.families.flatMap(f => f.fbmProduction
