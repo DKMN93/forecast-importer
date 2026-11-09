@@ -2350,6 +2350,8 @@ async function buildWochenplanungData(reqDays) {
     const partsMap     = partsData.mapping || {};
     const poData       = loadPurchaseOrders();
     const poIncoming   = poData.incoming || {};
+    const lotsBySku    = loadStockLots().lots || {};
+    const today        = new Date(); today.setHours(0, 0, 0, 0);
 
     // Abgelaufene Chargen dürfen nirgends als verfügbar gelten — weder für den
     // Einkauf-Pool noch für Produktions-/Versand-Entscheidungen. Nur fürs
@@ -2401,6 +2403,19 @@ async function buildWochenplanungData(reqDays) {
       const poolKg    = pool9Stk * sackKg + rawKg;
       const poolExpiredKg = +(mainExpiredOf(sack9Sku) * sackKg + mainExpiredOf(rohInfo.rohwareNr)).toFixed(1);
 
+      // Volle, ungeöffnete Rohware-Chargen (Verfügbar == Ursprungsgewicht des
+      // Großgebindes) entstehen z.B. durch eine Disassembly-Order, die einen
+      // -9-Sack für die Produktion in die A-Artikelnummer zurückbaut. Solange
+      // so eine Charge unangetastet ist, ist sie physisch weiterhin ein
+      // kompletter -9-Sack — nur buchhalterisch auf der Rohware-Nummer. Zählt
+      // daher für den -9-Bedarf als zusätzlicher -9-Bestand statt als
+      // generische, bereits angebrochene Rohware.
+      const rawLotsValid   = (lotsBySku[rohInfo.rohwareNr] || []).filter(l => !isLotExpired(l, today));
+      const fullWeightLots = rawLotsValid.filter(l => +((l.verfuegbar || 0).toFixed(1)) === +sackKg.toFixed(1));
+      const fullWeightUnits = fullWeightLots.length;
+      const fullWeightKg    = Math.min(rawKg, +fullWeightLots.reduce((s, l) => s + (l.verfuegbar || 0), 0).toFixed(2));
+      const partialRawKg    = +(rawKg - fullWeightKg).toFixed(2);
+
       // Direktverkauf der -9-Großgebinde selbst (z.B. 25kg-Sack B2B/Großhandel
       // über Shopify) — wird sonst nirgends erfasst, weil die sizes-Schleife
       // unten nur -1 bis -5 betrachtet und -9 nur als Rohware-Pool behandelt.
@@ -2410,8 +2425,16 @@ async function buildWochenplanungData(reqDays) {
       const totalUnits9  = sd9.direct + bundleUnits9;
       const velocityPW9  = weeks > 0 ? totalUnits9 / weeks : 0;
       const targetStk9   = Math.ceil(velocityPW9 * targetWeeks);
-      const rawNeed9     = Math.max(0, targetStk9 - pool9Stk);
-      const direct9Kg    = rawNeed9 * sackKg;
+      const pool9StkEquiv = pool9Stk + fullWeightUnits;
+      const rawNeed9      = Math.max(0, targetStk9 - pool9StkEquiv);
+      const direct9Kg      = rawNeed9 * sackKg;
+      // Rest des -9-äquivalenten Bestands, der nicht schon für den eigenen
+      // -9-Zielbestand gebunden ist, steht für FBM/FBA-Produktion zur
+      // Verfügung — ein ungenutzter voller -9-Sack/Charge kann jederzeit
+      // dafür aufgemacht werden. Verhindert, dass pool9Stk doppelt abgezogen
+      // wird (einmal hier, einmal schon in rawNeed9 oben).
+      const leftoverUnits9 = Math.max(0, pool9StkEquiv - targetStk9);
+      const poolKgForBuy   = +(leftoverUnits9 * sackKg + partialRawKg).toFixed(2);
 
       // FBM Produktion: alle Größen -1 bis -5 die aktiv sind
       const sizes = ['1','2','3','4','5'];
@@ -2545,7 +2568,7 @@ async function buildWochenplanungData(reqDays) {
       const incomingKg    = (poEntryAxy ? poEntryAxy.totalKg : 0) + (poEntry9 ? poEntry9.totalKg : 0);
       const incomingOrders = [...(poEntryAxy ? poEntryAxy.orders : []), ...(poEntry9 ? poEntry9.orders : [])];
       const hasOverdue    = !!((poEntryAxy && poEntryAxy.hasOverdue) || (poEntry9 && poEntry9.hasOverdue));
-      const buyKg        = Math.max(0, totalProdKg - poolKg);
+      const buyKg        = Math.max(0, totalProdKg - poolKgForBuy);
       const stillToBuyKg = Math.max(0, buyKg - incomingKg);
       const buySacks     = buyKg       > 0 ? Math.ceil(buyKg       / sackKg) : 0;
       const stillBuySacks = stillToBuyKg > 0 ? Math.ceil(stillToBuyKg / sackKg) : 0;
@@ -2572,9 +2595,12 @@ async function buildWochenplanungData(reqDays) {
         sackKg,
         rawKg:       +rawKg.toFixed(1),
         poolKg:      +poolKg.toFixed(1),
+        fullWeightUnits: fullWeightUnits,
+        fullWeightKg:    +fullWeightKg.toFixed(1),
         direct9:     {
           velocityPW: +velocityPW9.toFixed(2),
           current:    pool9Stk,
+          currentEquiv: pool9StkEquiv,
           target:     targetStk9,
           rawNeed:    rawNeed9,
           kg:         +direct9Kg.toFixed(1),
