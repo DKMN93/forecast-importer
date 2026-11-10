@@ -172,6 +172,7 @@ app.get('/api/config', (req, res) => {
     rohwareTargetDays: cfg.rohwareTargetDays || 28,
     fbmTargetDays:     cfg.fbmTargetDays     || 30,
     fbaTargetDays:     cfg.fbaTargetDays     || 35,
+    minVelocityForStock: cfg.minVelocityForStock || 10,
     configured:        !!(cfg.shopifyDomain && cfg.shopifyToken),
     deployedAt:        SERVER_START,
   });
@@ -181,7 +182,7 @@ app.post('/api/config', (req, res) => {
   const cfg = loadConfig();
   const { shopifyDomain, shopifyToken, shopifyClientId, shopifyClientSecret,
           targetMonths, forecastDays, lieferzeitWochen,
-          rohwareTargetDays, fbmTargetDays, fbaTargetDays } = req.body;
+          rohwareTargetDays, fbmTargetDays, fbaTargetDays, minVelocityForStock } = req.body;
 
   if (shopifyDomain)       cfg.shopifyDomain       = shopifyDomain.replace(/^https?:\/\//, '').replace(/\/$/, '');
   if (shopifyClientId)     cfg.shopifyClientId     = shopifyClientId;
@@ -193,6 +194,7 @@ app.post('/api/config', (req, res) => {
   if (rohwareTargetDays)   cfg.rohwareTargetDays   = parseInt(rohwareTargetDays);
   if (fbmTargetDays)       cfg.fbmTargetDays       = parseInt(fbmTargetDays);
   if (fbaTargetDays)       cfg.fbaTargetDays       = parseInt(fbaTargetDays);
+  if (minVelocityForStock !== undefined && minVelocityForStock !== '') cfg.minVelocityForStock = parseFloat(minVelocityForStock);
 
   saveConfig(cfg);
   res.json({ ok: true });
@@ -2336,6 +2338,7 @@ async function buildWochenplanungData(reqDays) {
     const fbmTargetDays     = cfg.fbmTargetDays     || 30;
     const rohwareTargetDays = cfg.rohwareTargetDays || 28;
     const fbaTargetDays     = cfg.fbaTargetDays     || 35;
+    const minVelocityForStock = cfg.minVelocityForStock || 10;
     const targetWeeks       = fbmTargetDays / 7;
 
     const artData      = loadArticles();
@@ -2461,7 +2464,6 @@ async function buildWochenplanungData(reqDays) {
         const lotSize     = sackKg > 0 && art.weightKg > 0
           ? Math.ceil(sackKg * 1000 / (art.weightKg * 1000))
           : 1;
-        const prodNeed    = rawNeed > 0 ? Math.ceil(rawNeed / lotSize) * lotSize : 0;
         const reichweiteWochen = velocityPW > 0 ? +(current / velocityPW).toFixed(1) : null;
 
         fbmProduction.push({
@@ -2477,16 +2479,39 @@ async function buildWochenplanungData(reqDays) {
           target:          targetStk,
           rawNeed,
           lotSize,
-          prodNeed,
+          prodNeed:        0, // unten befüllt — siehe Sack-Verteilung
+          isActiveStock:   velocityPW >= minVelocityForStock,
           reichweiteWochen,
           fuellrateProStunde: art.fuellrateProStunde || 0,
         });
       }
 
-      const totalFbmKg = fbmProduction.reduce((s, p) => {
-        const art = artItems[p.sku];
-        return s + p.prodNeed * (art ? (art.weightKg || 0) : 0);
-      }, 0);
+      // Produktion wird nicht mehr pro Größe einzeln auf einen vollen Sack
+      // aufgerundet — das führte bei Familien mit Bedarf in mehreren Größen zu
+      // massiver Überproduktion (z.B. 100kg vorgeschlagen bei 4,9kg echtem
+      // Bedarf, weil jede Größe für sich auf einen ganzen 25kg-Sack aufrundete).
+      // Jetzt: Gesamtbedarf der Familie einmal auf volle Säcke aufrunden: der
+      // "Sack-Rest" (surplusKg) geht proportional nur an Größen mit echtem
+      // Lagerabsatz oberhalb von minVelocityForStock (Schnelldreher) — alles
+      // darunter läuft rein JIT (nur der tatsächlich berechnete Bedarf, kein
+      // Lagerpuffer). Übrig gebliebene lose Rohware aus einem angebrochenen
+      // Sack bleibt einfach im Rohwarenpool liegen (siehe oben).
+      const needSizes   = fbmProduction.filter(p => p.rawNeed > 0);
+      const totalNeedKg = needSizes.reduce((s, p) => s + p.rawNeed * p.weightKg, 0);
+      if (totalNeedKg > 0 && sackKg > 0) {
+        const sacksToOpen  = Math.ceil(totalNeedKg / sackKg);
+        const producibleKg = sacksToOpen * sackKg;
+        const surplusKg    = producibleKg - totalNeedKg;
+        const activeSizes  = needSizes.filter(p => p.isActiveStock);
+        const activeNeedKg = activeSizes.reduce((s, p) => s + p.rawNeed * p.weightKg, 0);
+        for (const p of needSizes) {
+          const needKg  = p.rawNeed * p.weightKg;
+          const extraKg = (p.isActiveStock && activeNeedKg > 0) ? surplusKg * (needKg / activeNeedKg) : 0;
+          p.prodNeed    = p.weightKg > 0 ? Math.floor((needKg + extraKg) / p.weightKg) : p.rawNeed;
+        }
+      }
+
+      const totalFbmKg = fbmProduction.reduce((s, p) => s + p.prodNeed * p.weightKg, 0);
 
       // FBA — alle Gebindegrößen (-1 bis -5) berücksichtigen, nicht nur -5
       const fbaResults = [];
@@ -2673,7 +2698,7 @@ async function buildWochenplanungData(reqDays) {
     };
 
     return {
-      period:    { days, weeks: +weeks.toFixed(2), targetWeeks: +targetWeeks.toFixed(2) },
+      period:    { days, weeks: +weeks.toFixed(2), targetWeeks: +targetWeeks.toFixed(2), minVelocityForStock },
       updatedAt: {
         articles: artData.updatedAt || null,
         main:     mainData.updatedAt || null,
